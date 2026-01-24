@@ -433,13 +433,6 @@ st.markdown("""
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
 </div>
 """, unsafe_allow_html=True)</details>
-
----
-
-5. Click **"Commit changes"** (green button)
-
-6. **Wait 1-2 minutes** for Streamlit Cloud to redeploy automatically
-
 ---
 
 After this, the sidebar will show **"✅ API Key configured"** and users won't need to enter the key! 🎉
