@@ -1,6 +1,6 @@
 """
 Marksheet Marks Extractor - Web App
-A Streamlit app to extract marks from marksheet images using Claude Vision API
+A Streamlit app to extract marks from marksheet images and PDFs using Claude Vision API
 """
 
 import streamlit as st
@@ -9,6 +9,7 @@ import base64
 import json
 import pandas as pd
 from io import BytesIO
+import fitz  # PyMuPDF for PDF processing
 
 # Page configuration
 st.set_page_config(
@@ -143,6 +144,29 @@ def get_media_type(filename):
     return media_types.get(ext, 'image/jpeg')
 
 
+def pdf_to_images(pdf_bytes):
+    """Convert PDF pages to images and return as list of (image_bytes, media_type)."""
+    images = []
+    try:
+        pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+        for page_num in range(len(pdf_document)):
+            page = pdf_document[page_num]
+            # Render page to image with high resolution
+            mat = fitz.Matrix(2, 2)  # 2x zoom for better quality
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+            images.append((img_bytes, "image/png"))
+        pdf_document.close()
+    except Exception as e:
+        st.error(f"Error processing PDF: {e}")
+    return images
+
+
+def is_pdf(filename):
+    """Check if file is a PDF."""
+    return filename.lower().endswith('.pdf')
+
+
 def extract_marks(image_bytes, media_type, api_key):
     """Extract marks from image using Claude Vision API."""
     image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
@@ -218,7 +242,8 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### 📊 Supported Formats")
-    st.markdown("JPG, JPEG, PNG, GIF, WEBP")
+    st.markdown("**Images:** JPG, JPEG, PNG, GIF, WEBP")
+    st.markdown("**Documents:** PDF")
 
 
 # Main content
@@ -227,24 +252,45 @@ col1, col2 = st.columns([1, 1])
 with col1:
     st.markdown("### 📤 Upload Marksheet")
     uploaded_file = st.file_uploader(
-        "Choose an image file",
-        type=['jpg', 'jpeg', 'png', 'gif', 'webp'],
-        help="Upload a clear image of the marksheet"
+        "Choose an image or PDF file",
+        type=['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'],
+        help="Upload a clear image or PDF of the marksheet"
     )
 
 with col2:
     if uploaded_file:
         st.markdown("### 🖼️ Preview")
-        st.image(uploaded_file, use_container_width=True)
+        if is_pdf(uploaded_file.name):
+            # Show first page preview for PDF
+            pdf_images = pdf_to_images(uploaded_file.getvalue())
+            if pdf_images:
+                st.image(pdf_images[0][0], use_container_width=True)
+                if len(pdf_images) > 1:
+                    st.caption(f"📄 PDF has {len(pdf_images)} pages (showing page 1)")
+        else:
+            st.image(uploaded_file, use_container_width=True)
 
 # Process button
 if uploaded_file and api_key:
     if st.button("🚀 Extract Marks", use_container_width=True):
         with st.spinner("🔍 Analyzing marksheet..."):
             try:
-                # Get image bytes and media type
-                image_bytes = uploaded_file.getvalue()
-                media_type = get_media_type(uploaded_file.name)
+                # Handle PDF files
+                if is_pdf(uploaded_file.name):
+                    pdf_images = pdf_to_images(uploaded_file.getvalue())
+                    if not pdf_images:
+                        st.error("Could not extract images from PDF")
+                        st.stop()
+                    # Use first page (or combine all pages)
+                    image_bytes, media_type = pdf_images[0]
+                    
+                    # If multiple pages, we can process them all
+                    if len(pdf_images) > 1:
+                        st.info(f"📄 Processing {len(pdf_images)} pages from PDF...")
+                else:
+                    # Get image bytes and media type
+                    image_bytes = uploaded_file.getvalue()
+                    media_type = get_media_type(uploaded_file.name)
                 
                 # Extract marks
                 result = extract_marks(image_bytes, media_type, api_key)
