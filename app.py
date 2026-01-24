@@ -221,23 +221,40 @@ If any field is not found in the image, use null for that field."""
     return response.content[0].text
 
 
+# Get API key from secrets (configured in Streamlit Cloud) or manual input
+def get_api_key():
+    """Get API key from Streamlit secrets or return None."""
+    try:
+        return st.secrets["ANTHROPIC_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        return None
+
+# Check if API key is configured in secrets
+secrets_api_key = get_api_key()
+
 # API Key input (in sidebar)
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
-    api_key = st.text_input(
-        "Anthropic API Key",
-        type="password",
-        placeholder="sk-ant-api03-...",
-        help="Get your API key from console.anthropic.com"
-    )
+    
+    if secrets_api_key:
+        # API key is configured in secrets - no need to enter manually
+        st.success("✅ API Key configured")
+        api_key = secrets_api_key
+    else:
+        # Allow manual entry if not configured in secrets
+        api_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            placeholder="sk-ant-api03-...",
+            help="Get your API key from console.anthropic.com"
+        )
     
     st.markdown("---")
     st.markdown("### 💡 How to use")
     st.markdown("""
-    1. Enter your Anthropic API key
-    2. Upload a marksheet image
-    3. Click 'Extract Marks'
-    4. Download JSON or view results
+    1. Upload a marksheet image or PDF
+    2. Click 'Extract Marks'
+    3. Download JSON or view results
     """)
     
     st.markdown("---")
@@ -298,7 +315,7 @@ if uploaded_file and api_key:
                 # Parse JSON
                 # Remove markdown code blocks if present
                 clean_result = result.strip()
-                if clean_result.startswith("```json"):
+                if clean_result.startswith(""):
                     clean_result = clean_result[7:]
                 if clean_result.startswith("```"):
                     clean_result = clean_result[3:]
@@ -415,5 +432,14 @@ st.markdown("""
 <div class="footer">
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
 </div>
-""", unsafe_allow_html=True)
+""", unsafe_allow_html=True)</details>
 
+---
+
+5. Click **"Commit changes"** (green button)
+
+6. **Wait 1-2 minutes** for Streamlit Cloud to redeploy automatically
+
+---
+
+After this, the sidebar will show **"✅ API Key configured"** and users won't need to enter the key! 🎉
