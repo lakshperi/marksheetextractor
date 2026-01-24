@@ -315,7 +315,7 @@ if uploaded_file and api_key:
                 # Parse JSON
                 # Remove markdown code blocks if present
                 clean_result = result.strip()
-                if clean_result.startswith(""):
+                if clean_result.startswith("```json"):
                     clean_result = clean_result[7:]
                 if clean_result.startswith("```"):
                     clean_result = clean_result[3:]
@@ -432,4 +432,5 @@ st.markdown("""
 <div class="footer">
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
 </div>
-""", unsafe_allow_html=True)</details>
+""", unsafe_allow_html=True)
+
