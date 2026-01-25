@@ -1,13 +1,12 @@
 """
-Marksheet Marks Extractor - Web App
-Using Google Cloud Vision API (FREE tier: 1000 images/month)
+Marksheet Marks Extractor - Hybrid Version
+Google Vision (FREE OCR) + Claude (Smart Parsing) = 70% Cost Savings
 """
 
 import streamlit as st
-import base64
+import anthropic
 import json
 import pandas as pd
-import re
 import fitz  # PyMuPDF for PDF processing
 from google.cloud import vision
 from google.oauth2 import service_account
@@ -102,7 +101,7 @@ st.markdown("""
         font-size: 0.9rem;
     }
     
-    .free-badge {
+    .savings-badge {
         background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
         color: white;
         padding: 0.25rem 0.75rem;
@@ -118,24 +117,11 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="main-header">
-    <h1>📚 Marksheet Extractor <span class="free-badge">FREE</span></h1>
+    <h1>📚 Marksheet Extractor <span class="savings-badge">70% Savings</span></h1>
     <p>Upload a marksheet image and get structured data instantly</p>
-    <p style="font-size: 0.85rem; opacity: 0.8;">Powered by Google Cloud Vision • 1,000 free extractions/month</p>
+    <p style="font-size: 0.85rem; opacity: 0.8;">Hybrid: Google Vision (FREE OCR) + Claude (Smart Parsing)</p>
 </div>
 """, unsafe_allow_html=True)
-
-
-def get_media_type(filename):
-    """Get media type from filename."""
-    ext = filename.lower().split('.')[-1]
-    media_types = {
-        'jpg': 'image/jpeg',
-        'jpeg': 'image/jpeg',
-        'png': 'image/png',
-        'gif': 'image/gif',
-        'webp': 'image/webp'
-    }
-    return media_types.get(ext, 'image/jpeg')
 
 
 def pdf_to_images(pdf_bytes):
@@ -173,10 +159,8 @@ def get_vision_client(credentials_json):
 
 
 def extract_text_with_google_vision(image_bytes, client):
-    """Extract text from image using Google Cloud Vision API."""
+    """Extract text from image using Google Cloud Vision API (FREE tier)."""
     image = vision.Image(content=image_bytes)
-    
-    # Use DOCUMENT_TEXT_DETECTION for better table/structure recognition
     response = client.document_text_detection(image=image)
     
     if response.error.message:
@@ -185,188 +169,123 @@ def extract_text_with_google_vision(image_bytes, client):
     return response.full_text_annotation.text
 
 
-def parse_marksheet_text(text):
-    """Parse extracted text into structured JSON format."""
-    result = {
-        "student_name": None,
-        "roll_number": None,
-        "class": None,
-        "school": None,
-        "exam": None,
-        "subjects": [],
-        "total_marks_obtained": None,
-        "total_max_marks": None,
-        "percentage": None,
-        "grade": None,
-        "result": None
-    }
+def parse_text_with_claude(extracted_text, api_key):
+    """Use Claude to intelligently parse the extracted text into structured JSON."""
+    client = anthropic.Anthropic(api_key=api_key)
     
-    lines = text.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        messages=[{
+            "role": "user",
+            "content": f"""Here is text extracted from a marksheet/report card using OCR:
+
+---
+{extracted_text}
+---
+
+Parse this text and extract the marks information. Return ONLY a valid JSON object (no markdown, no explanation) with these fields:
+
+{{
+    "student_name": "Name of the student",
+    "roll_number": "Roll number if present",
+    "class": "Class/Grade if present",
+    "school": "School/College name if present",
+    "exam": "Exam name if present",
+    "subjects": [
+        {{
+            "subject_name": "Subject name",
+            "marks_obtained": number,
+            "max_marks": number
+        }}
+    ],
+    "total_marks_obtained": number,
+    "total_max_marks": number,
+    "percentage": number,
+    "grade": "Grade if present",
+    "result": "Pass/Fail if present"
+}}
+
+If any field is not found in the text, use null for that field.
+Extract ALL subjects with their marks that you can find in the text."""
+        }]
+    )
     
-    # Common patterns for marksheet parsing
-    name_patterns = [
-        r"(?:name|student|candidate)[\s:]+([A-Za-z\s\.]+)",
-        r"^([A-Z][A-Z\s\.]+)$"  # All caps name on its own line
-    ]
-    
-    roll_patterns = [
-        r"(?:roll|reg|registration|enroll)[\s\.]*(?:no|number)?[\s:\.]*(\d+)",
-        r"(\d{6,12})"  # 6-12 digit number
-    ]
-    
-    # Extract student name
-    for pattern in name_patterns:
-        for line in lines[:15]:  # Check first 15 lines
-            match = re.search(pattern, line, re.IGNORECASE)
-            if match:
-                name = match.group(1).strip()
-                if len(name) > 3 and not any(char.isdigit() for char in name):
-                    result["student_name"] = name.upper()
-                    break
-        if result["student_name"]:
-            break
-    
-    # Extract roll number
-    for pattern in roll_patterns:
-        for line in lines[:20]:
-            match = re.search(pattern, line, re.IGNORECASE)
-            if match:
-                result["roll_number"] = match.group(1)
-                break
-        if result["roll_number"]:
-            break
-    
-    # Extract school/college name
-    school_keywords = ['college', 'school', 'university', 'institute', 'polytechnic']
-    for line in lines[:10]:
-        if any(keyword in line.lower() for keyword in school_keywords):
-            result["school"] = line.strip()
-            break
-    
-    # Extract subjects and marks
-    # Look for patterns like "Subject Name    85    100" or "Subject Name: 85/100"
-    subject_patterns = [
-        r"([A-Za-z\s&]+?)[\s:]+(\d{1,3})[\s/]+(\d{2,3})",  # Subject: 85/100
-        r"([A-Za-z\s&]+?)\s+(\d{1,3})\s+(\d{2,3})",  # Subject  85  100
-    ]
-    
-    excluded_words = ['total', 'grand', 'aggregate', 'percentage', 'result', 'grade', 'rank', 'roll', 'name']
-    
-    for line in lines:
-        for pattern in subject_patterns:
-            match = re.search(pattern, line, re.IGNORECASE)
-            if match:
-                subject_name = match.group(1).strip()
-                # Filter out non-subject lines
-                if (len(subject_name) > 2 and 
-                    not any(word in subject_name.lower() for word in excluded_words) and
-                    not subject_name.isdigit()):
-                    try:
-                        marks_obtained = int(match.group(2))
-                        max_marks = int(match.group(3))
-                        if marks_obtained <= max_marks and max_marks <= 200:
-                            result["subjects"].append({
-                                "subject_name": subject_name.upper(),
-                                "marks_obtained": marks_obtained,
-                                "max_marks": max_marks
-                            })
-                    except ValueError:
-                        pass
-                break
-    
-    # Extract total marks
-    total_pattern = r"(?:total|grand\s*total|aggregate)[\s:]*(\d{1,4})[\s/]+(\d{1,4})"
-    for line in lines:
-        match = re.search(total_pattern, line, re.IGNORECASE)
-        if match:
-            result["total_marks_obtained"] = int(match.group(1))
-            result["total_max_marks"] = int(match.group(2))
-            break
-    
-    # Calculate total from subjects if not found
-    if not result["total_marks_obtained"] and result["subjects"]:
-        result["total_marks_obtained"] = sum(s["marks_obtained"] for s in result["subjects"])
-        result["total_max_marks"] = sum(s["max_marks"] for s in result["subjects"])
-    
-    # Extract or calculate percentage
-    percentage_pattern = r"(?:percentage|percent|%)[\s:]*(\d{1,2}\.?\d*)"
-    for line in lines:
-        match = re.search(percentage_pattern, line, re.IGNORECASE)
-        if match:
-            result["percentage"] = float(match.group(1))
-            break
-    
-    if not result["percentage"] and result["total_marks_obtained"] and result["total_max_marks"]:
-        result["percentage"] = round((result["total_marks_obtained"] / result["total_max_marks"]) * 100, 2)
-    
-    # Extract result (pass/fail)
-    result_pattern = r"\b(pass|passed|fail|failed)\b"
-    for line in lines:
-        match = re.search(result_pattern, line, re.IGNORECASE)
-        if match:
-            result["result"] = "PASS" if "pass" in match.group(1).lower() else "FAIL"
-            break
-    
-    # Infer result from percentage
-    if not result["result"] and result["percentage"]:
-        result["result"] = "PASS" if result["percentage"] >= 35 else "FAIL"
-    
-    # Extract grade
-    grade_pattern = r"(?:grade)[\s:]*([A-F][+-]?|\b[A-F]\b)"
-    for line in lines:
-        match = re.search(grade_pattern, line, re.IGNORECASE)
-        if match:
-            result["grade"] = match.group(1).upper()
-            break
-    
-    return result
+    return response.content[0].text
 
 
-# Get credentials from secrets or manual input
-def get_credentials():
-    """Get Google Cloud credentials from Streamlit secrets or return None."""
+# Get credentials from secrets
+def get_google_credentials():
+    """Get Google Cloud credentials from Streamlit secrets."""
     try:
         return st.secrets["GOOGLE_CREDENTIALS"]
     except (KeyError, FileNotFoundError):
         return None
 
-# Check if credentials are configured in secrets
-secrets_credentials = get_credentials()
+
+def get_anthropic_key():
+    """Get Anthropic API key from Streamlit secrets."""
+    try:
+        return st.secrets["ANTHROPIC_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        return None
+
+
+# Check if credentials are configured
+google_creds = get_google_credentials()
+anthropic_key = get_anthropic_key()
 
 # Sidebar
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     
-    if secrets_credentials:
-        st.success("✅ Google Cloud configured")
-        credentials_json = secrets_credentials
+    # Google credentials
+    if google_creds:
+        st.success("✅ Google Vision configured")
+        credentials_json = google_creds
     else:
         st.markdown("**Google Cloud Credentials**")
         credentials_file = st.file_uploader(
             "Upload service account JSON",
             type=['json'],
-            help="Upload your Google Cloud service account credentials file"
+            help="For FREE OCR text extraction"
         )
-        if credentials_file:
-            credentials_json = credentials_file.getvalue().decode('utf-8')
-            st.success("✅ Credentials loaded")
-        else:
-            credentials_json = None
+        credentials_json = credentials_file.getvalue().decode('utf-8') if credentials_file else None
+        if credentials_json:
+            st.success("✅ Google credentials loaded")
+    
+    # Anthropic API key
+    if anthropic_key:
+        st.success("✅ Claude API configured")
+        api_key = anthropic_key
+    else:
+        api_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            placeholder="sk-ant-api03-...",
+            help="For smart text parsing (~$0.003/marksheet)"
+        )
+        if api_key:
+            st.success("✅ API key entered")
     
     st.markdown("---")
-    st.markdown("### 💰 Cost")
+    st.markdown("### 💰 Cost Breakdown")
     st.markdown("""
-    - **First 1,000/month:** FREE
-    - **After that:** $1.50 per 1,000
+    | Step | Cost |
+    |------|------|
+    | Google Vision OCR | **FREE** |
+    | Claude Text Parse | ~$0.003 |
+    | **Total** | **~$0.003** |
+    
+    *vs $0.01 with image-only approach*
     """)
     
     st.markdown("---")
-    st.markdown("### 💡 How to use")
+    st.markdown("### 💡 How it works")
     st.markdown("""
-    1. Upload a marksheet image or PDF
-    2. Click 'Extract Marks'
-    3. Download JSON or view results
+    1. **Google Vision** extracts text (FREE)
+    2. **Claude** parses text to JSON (cheap)
+    3. You get accurate results at 70% less cost!
     """)
     
     st.markdown("---")
@@ -399,42 +318,74 @@ with col2:
             st.image(uploaded_file, use_container_width=True)
 
 # Process button
-if uploaded_file and credentials_json:
-    if st.button("🚀 Extract Marks (FREE)", use_container_width=True):
-        with st.spinner("🔍 Analyzing marksheet with Google Vision..."):
-            try:
-                # Create Vision client
-                client = get_vision_client(credentials_json)
-                if not client:
-                    st.error("Failed to create Google Vision client")
-                    st.stop()
-                
-                # Handle PDF files
-                if is_pdf(uploaded_file.name):
-                    pdf_images = pdf_to_images(uploaded_file.getvalue())
-                    if not pdf_images:
-                        st.error("Could not extract images from PDF")
+if uploaded_file and credentials_json and api_key:
+    if st.button("🚀 Extract Marks (Hybrid Mode)", use_container_width=True):
+        
+        # Progress indicators
+        progress_container = st.container()
+        
+        with progress_container:
+            # Step 1: Google Vision OCR
+            with st.spinner("Step 1/2: Extracting text with Google Vision (FREE)..."):
+                try:
+                    vision_client = get_vision_client(credentials_json)
+                    if not vision_client:
+                        st.error("Failed to create Google Vision client")
                         st.stop()
-                    image_bytes = pdf_images[0]
-                else:
-                    image_bytes = uploaded_file.getvalue()
-                
-                # Extract text using Google Vision
-                extracted_text = extract_text_with_google_vision(image_bytes, client)
-                
-                # Parse the text into structured data
-                data = parse_marksheet_text(extracted_text)
-                
-                # Store in session state
-                st.session_state['extracted_data'] = data
-                st.session_state['raw_json'] = json.dumps(data, indent=2)
-                st.session_state['raw_text'] = extracted_text
-                
-            except Exception as e:
-                st.error(f"Error: {e}")
+                    
+                    # Handle PDF files
+                    if is_pdf(uploaded_file.name):
+                        pdf_images = pdf_to_images(uploaded_file.getvalue())
+                        if not pdf_images:
+                            st.error("Could not extract images from PDF")
+                            st.stop()
+                        image_bytes = pdf_images[0]
+                    else:
+                        image_bytes = uploaded_file.getvalue()
+                    
+                    # Extract text
+                    extracted_text = extract_text_with_google_vision(image_bytes, vision_client)
+                    st.success("✅ Text extracted with Google Vision (FREE)")
+                    
+                except Exception as e:
+                    st.error(f"Google Vision Error: {e}")
+                    st.stop()
+            
+            # Step 2: Claude parsing
+            with st.spinner("Step 2/2: Parsing with Claude (~$0.003)..."):
+                try:
+                    result = parse_text_with_claude(extracted_text, api_key)
+                    
+                    # Parse JSON
+                    clean_result = result.strip()
+                    if clean_result.startswith("```json"):
+                        clean_result = clean_result[7:]
+                    if clean_result.startswith("```"):
+                        clean_result = clean_result[3:]
+                    if clean_result.endswith("```"):
+                        clean_result = clean_result[:-3]
+                    clean_result = clean_result.strip()
+                    
+                    data = json.loads(clean_result)
+                    
+                    # Store in session state
+                    st.session_state['extracted_data'] = data
+                    st.session_state['raw_json'] = json.dumps(data, indent=2)
+                    st.session_state['raw_text'] = extracted_text
+                    
+                    st.success("✅ Marks parsed successfully!")
+                    
+                except json.JSONDecodeError as e:
+                    st.error(f"Failed to parse response as JSON: {e}")
+                    st.code(result)
+                except anthropic.APIError as e:
+                    st.error(f"Claude API Error: {e}")
 
-elif uploaded_file and not credentials_json:
-    st.warning("⚠️ Please upload Google Cloud credentials in the sidebar")
+elif uploaded_file:
+    if not credentials_json:
+        st.warning("⚠️ Please add Google Cloud credentials in the sidebar")
+    if not api_key:
+        st.warning("⚠️ Please add Anthropic API key in the sidebar")
 
 # Display results
 if 'extracted_data' in st.session_state:
@@ -478,7 +429,7 @@ if 'extracted_data' in st.session_state:
     
     with col3:
         result = data.get('result') or 'N/A'
-        result_color = "#22c55e" if result == "PASS" else "#ef4444"
+        result_color = "#22c55e" if result and "PASS" in str(result).upper() else "#ef4444"
         st.markdown(f"""
         <div class="stat-box">
             <div class="stat-number" style="color:{result_color}">{result}</div>
@@ -499,7 +450,7 @@ if 'extracted_data' in st.session_state:
             hide_index=True
         )
     else:
-        st.info("No subjects detected. Check the raw text below.")
+        st.info("No subjects detected.")
     
     # Download buttons
     st.markdown("### 💾 Download Data")
@@ -529,14 +480,14 @@ if 'extracted_data' in st.session_state:
     with st.expander("🔍 View Raw JSON"):
         st.code(st.session_state['raw_json'], language='json')
     
-    with st.expander("📄 View Raw OCR Text"):
+    with st.expander("📄 View Extracted OCR Text (from Google Vision)"):
         st.text(st.session_state.get('raw_text', 'No text extracted'))
 
 # Footer
 st.markdown("""
 <div class="footer">
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
-    <p style="font-size: 0.8rem;">Powered by Google Cloud Vision API</p>
+    <p style="font-size: 0.8rem;">Hybrid Mode: Google Vision (FREE) + Claude (Smart)</p>
 </div>
 """, unsafe_allow_html=True)
 
