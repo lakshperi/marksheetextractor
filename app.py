@@ -1,7 +1,7 @@
 """
-Document Extractor - Multi-Document Support
+Document Extractor - Multi-Document Support with Google Sheets Integration
 Supports: Marksheets & Bank Passbooks
-Google Vision (FREE OCR) + Claude (Smart Parsing) = 70% Cost Savings
+Google Vision (FREE OCR) + Claude (Smart Parsing) + Google Sheets (Auto-save)
 """
 
 import streamlit as st
@@ -11,6 +11,8 @@ import pandas as pd
 import fitz  # PyMuPDF for PDF processing
 from google.cloud import vision
 from google.oauth2 import service_account
+import gspread
+from datetime import datetime
 
 # Page configuration
 st.set_page_config(
@@ -113,41 +115,15 @@ st.markdown("""
         margin-left: 0.5rem;
     }
     
-    .doc-type-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        border: 2px solid #e2e8f0;
-        text-align: center;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    
-    .doc-type-card:hover {
-        border-color: #2d5a87;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    
-    .doc-type-card.selected {
-        border-color: #2d5a87;
-        background: linear-gradient(145deg, #f0f9ff 0%, #e0f2fe 100%);
-    }
-    
-    .info-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 0.5rem 0;
-        border-bottom: 1px solid #e2e8f0;
-    }
-    
-    .info-label {
-        color: #64748b;
-        font-weight: 500;
-    }
-    
-    .info-value {
-        color: #1e3a5f;
+    .sheets-badge {
+        background: linear-gradient(135deg, #4285f4 0%, #34a853 100%);
+        color: white;
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.8rem;
         font-weight: 600;
+        display: inline-block;
+        margin-left: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -155,9 +131,12 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="main-header">
-    <h1>📄 Document Extractor <span class="savings-badge">70% Savings</span></h1>
+    <h1>📄 Document Extractor</h1>
     <p>Extract data from Marksheets & Bank Passbooks</p>
-    <p style="font-size: 0.85rem; opacity: 0.8;">Hybrid: Google Vision (FREE OCR) + Claude (Smart Parsing)</p>
+    <p style="font-size: 0.85rem; opacity: 0.8;">
+        <span class="savings-badge">70% Savings</span>
+        <span class="sheets-badge">📊 Auto-save to Sheets</span>
+    </p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -194,6 +173,144 @@ def get_vision_client(credentials_json):
     except Exception as e:
         st.error(f"Error creating Vision client: {e}")
         return None
+
+
+def get_sheets_client(credentials_json):
+    """Create Google Sheets client from credentials."""
+    try:
+        credentials_dict = json.loads(credentials_json)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_dict,
+            scopes=[
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ]
+        )
+        client = gspread.authorize(credentials)
+        return client
+    except Exception as e:
+        st.error(f"Error creating Sheets client: {e}")
+        return None
+
+
+def get_or_create_spreadsheet(sheets_client, spreadsheet_id=None):
+    """Get existing spreadsheet or return None if not found."""
+    try:
+        if spreadsheet_id:
+            return sheets_client.open_by_key(spreadsheet_id)
+        return None
+    except Exception as e:
+        st.warning(f"Could not open spreadsheet: {e}")
+        return None
+
+
+def ensure_worksheet_headers(worksheet, headers):
+    """Ensure worksheet has correct headers."""
+    try:
+        existing = worksheet.row_values(1)
+        if not existing or existing != headers:
+            worksheet.clear()
+            worksheet.append_row(headers)
+    except Exception:
+        worksheet.append_row(headers)
+
+
+def save_marksheet_to_sheets(sheets_client, spreadsheet_id, data):
+    """Save marksheet data to Google Sheets."""
+    try:
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+        
+        # Try to get or create Marksheets worksheet
+        try:
+            worksheet = spreadsheet.worksheet("Marksheets")
+        except gspread.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title="Marksheets", rows=1000, cols=20)
+        
+        # Define headers
+        headers = [
+            "Timestamp", "Student Name", "Roll Number", "School/College", 
+            "Class/Semester", "Exam", "Total Marks", "Max Marks", 
+            "Percentage", "Result", "Subjects & Marks"
+        ]
+        
+        # Ensure headers exist
+        ensure_worksheet_headers(worksheet, headers)
+        
+        # Prepare subjects string
+        subjects_str = ""
+        if data.get('subjects'):
+            subjects_str = " | ".join([
+                f"{s.get('subject_name', 'N/A')}: {s.get('marks_obtained', 0)}/{s.get('max_marks', 100)}"
+                for s in data['subjects']
+            ])
+        
+        # Prepare row data
+        row = [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            data.get('student_name') or 'N/A',
+            data.get('roll_number') or 'N/A',
+            data.get('school') or 'N/A',
+            data.get('class') or 'N/A',
+            data.get('exam') or 'N/A',
+            data.get('total_marks_obtained') or 0,
+            data.get('total_max_marks') or 0,
+            data.get('percentage') or 0,
+            data.get('result') or 'N/A',
+            subjects_str
+        ]
+        
+        # Append row
+        worksheet.append_row(row, value_input_option='USER_ENTERED')
+        return True, f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+        
+    except Exception as e:
+        return False, str(e)
+
+
+def save_passbook_to_sheets(sheets_client, spreadsheet_id, data):
+    """Save passbook data to Google Sheets."""
+    try:
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+        
+        # Try to get or create Passbooks worksheet
+        try:
+            worksheet = spreadsheet.worksheet("Passbooks")
+        except gspread.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title="Passbooks", rows=1000, cols=15)
+        
+        # Define headers
+        headers = [
+            "Timestamp", "Account Holder Name", "Account Number", "Bank Name",
+            "Branch Name", "IFSC Code", "MICR Code", "Customer ID",
+            "Account Type", "Branch Address", "Phone", "Email", "Nominee"
+        ]
+        
+        # Ensure headers exist
+        ensure_worksheet_headers(worksheet, headers)
+        
+        # Prepare row data
+        row = [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            data.get('account_holder_name') or 'N/A',
+            data.get('account_number') or 'N/A',
+            data.get('bank_name') or 'N/A',
+            data.get('branch_name') or 'N/A',
+            data.get('ifsc_code') or 'N/A',
+            data.get('micr_code') or 'N/A',
+            data.get('customer_id') or 'N/A',
+            data.get('account_type') or 'N/A',
+            data.get('branch_address') or 'N/A',
+            data.get('phone_number') or 'N/A',
+            data.get('email') or 'N/A',
+            data.get('nominee_name') or 'N/A'
+        ]
+        
+        # Append row
+        worksheet.append_row(row, value_input_option='USER_ENTERED')
+        return True, f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+        
+    except Exception as e:
+        return False, str(e)
 
 
 def extract_text_with_google_vision(image_bytes, client):
@@ -301,7 +418,6 @@ Look carefully for IFSC code (11 characters, starts with 4 letters), MICR code (
 
 # Get credentials from secrets
 def get_google_credentials():
-    """Get Google Cloud credentials from Streamlit secrets."""
     try:
         return st.secrets["GOOGLE_CREDENTIALS"]
     except (KeyError, FileNotFoundError):
@@ -309,9 +425,15 @@ def get_google_credentials():
 
 
 def get_anthropic_key():
-    """Get Anthropic API key from Streamlit secrets."""
     try:
         return st.secrets["ANTHROPIC_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        return None
+
+
+def get_spreadsheet_id():
+    try:
+        return st.secrets["GOOGLE_SPREADSHEET_ID"]
     except (KeyError, FileNotFoundError):
         return None
 
@@ -319,6 +441,7 @@ def get_anthropic_key():
 # Check if credentials are configured
 google_creds = get_google_credentials()
 anthropic_key = get_anthropic_key()
+spreadsheet_id = get_spreadsheet_id()
 
 # Sidebar
 with st.sidebar:
@@ -326,14 +449,14 @@ with st.sidebar:
     
     # Google credentials
     if google_creds:
-        st.success("✅ Google Vision configured")
+        st.success("✅ Google Cloud configured")
         credentials_json = google_creds
     else:
         st.markdown("**Google Cloud Credentials**")
         credentials_file = st.file_uploader(
             "Upload service account JSON",
             type=['json'],
-            help="For FREE OCR text extraction"
+            help="For FREE OCR and Sheets"
         )
         credentials_json = credentials_file.getvalue().decode('utf-8') if credentials_file else None
         if credentials_json:
@@ -348,14 +471,31 @@ with st.sidebar:
             "Anthropic API Key",
             type="password",
             placeholder="sk-ant-api03-...",
-            help="For smart text parsing (~$0.003/document)"
+            help="For smart text parsing"
         )
         if api_key:
             st.success("✅ API key entered")
     
+    # Google Spreadsheet ID
     st.markdown("---")
-    st.markdown("### 💰 Cost: ~$0.003/document")
-    st.markdown("*Google Vision: FREE, Claude: ~$0.003*")
+    st.markdown("### 📊 Google Sheets")
+    
+    if spreadsheet_id:
+        st.success("✅ Spreadsheet configured")
+        sheet_id = spreadsheet_id
+        st.markdown(f"[📊 Open Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id})")
+    else:
+        sheet_id = st.text_input(
+            "Spreadsheet ID",
+            placeholder="1abc...xyz",
+            help="The ID from your Google Sheets URL"
+        )
+        if sheet_id:
+            st.success("✅ Spreadsheet ID entered")
+        st.markdown("*Get ID from: docs.google.com/spreadsheets/d/**ID**/edit*")
+    
+    st.markdown("---")
+    st.markdown("### 💰 Cost: ~$0.003/doc")
     
     st.markdown("---")
     st.markdown("### 📊 Supported Formats")
@@ -373,19 +513,17 @@ with col1:
 with col2:
     passbook_selected = st.button("🏦 Bank Passbook", use_container_width=True, key="btn_passbook")
 
-# Initialize session state for document type
+# Initialize session state
 if 'doc_type' not in st.session_state:
     st.session_state['doc_type'] = None
 
 if marksheet_selected:
     st.session_state['doc_type'] = 'marksheet'
-    # Clear previous results
     if 'extracted_data' in st.session_state:
         del st.session_state['extracted_data']
 
 if passbook_selected:
     st.session_state['doc_type'] = 'passbook'
-    # Clear previous results
     if 'extracted_data' in st.session_state:
         del st.session_state['extracted_data']
 
@@ -394,9 +532,9 @@ if st.session_state['doc_type']:
     doc_type = st.session_state['doc_type']
     
     if doc_type == 'marksheet':
-        st.info("📚 **Selected: Marksheet** - Will extract student name, subjects, marks, percentage, etc.")
+        st.info("📚 **Selected: Marksheet** - Will extract student details and marks")
     else:
-        st.info("🏦 **Selected: Bank Passbook** - Will extract account holder name, account number, IFSC, MICR, branch details, etc.")
+        st.info("🏦 **Selected: Bank Passbook** - Will extract account details")
     
     st.markdown("---")
     
@@ -408,7 +546,7 @@ if st.session_state['doc_type']:
         uploaded_file = st.file_uploader(
             "Choose an image or PDF file",
             type=['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'],
-            help=f"Upload a clear image or PDF of the {'marksheet' if doc_type == 'marksheet' else 'passbook'}"
+            help=f"Upload a clear image or PDF"
         )
     
     with col2:
@@ -425,13 +563,13 @@ if st.session_state['doc_type']:
     
     # Process button
     if uploaded_file and credentials_json and api_key:
-        if st.button(f"🚀 Extract {'Marks' if doc_type == 'marksheet' else 'Details'}", use_container_width=True):
+        if st.button(f"🚀 Extract & Save to Sheets", use_container_width=True):
             
-            with st.spinner("Step 1/2: Extracting text with Google Vision (FREE)..."):
+            with st.spinner("Step 1/3: Extracting text (FREE)..."):
                 try:
                     vision_client = get_vision_client(credentials_json)
                     if not vision_client:
-                        st.error("Failed to create Google Vision client")
+                        st.error("Failed to create Vision client")
                         st.stop()
                     
                     if is_pdf(uploaded_file.name):
@@ -447,17 +585,16 @@ if st.session_state['doc_type']:
                     st.success("✅ Text extracted (FREE)")
                     
                 except Exception as e:
-                    st.error(f"Google Vision Error: {e}")
+                    st.error(f"Vision Error: {e}")
                     st.stop()
             
-            with st.spinner("Step 2/2: Parsing with Claude (~$0.003)..."):
+            with st.spinner("Step 2/3: Parsing with Claude..."):
                 try:
                     if doc_type == 'marksheet':
                         result = parse_marksheet_with_claude(extracted_text, api_key)
                     else:
                         result = parse_passbook_with_claude(extracted_text, api_key)
                     
-                    # Parse JSON
                     clean_result = result.strip()
                     if clean_result.startswith("```json"):
                         clean_result = clean_result[7:]
@@ -474,13 +611,38 @@ if st.session_state['doc_type']:
                     st.session_state['raw_text'] = extracted_text
                     st.session_state['result_type'] = doc_type
                     
-                    st.success("✅ Data extracted successfully!")
+                    st.success("✅ Data parsed")
                     
                 except json.JSONDecodeError as e:
-                    st.error(f"Failed to parse response: {e}")
+                    st.error(f"Parse error: {e}")
                     st.code(result)
+                    st.stop()
                 except anthropic.APIError as e:
-                    st.error(f"Claude API Error: {e}")
+                    st.error(f"Claude Error: {e}")
+                    st.stop()
+            
+            # Save to Google Sheets
+            if sheet_id:
+                with st.spinner("Step 3/3: Saving to Google Sheets..."):
+                    try:
+                        sheets_client = get_sheets_client(credentials_json)
+                        if sheets_client:
+                            if doc_type == 'marksheet':
+                                success, result_url = save_marksheet_to_sheets(sheets_client, sheet_id, data)
+                            else:
+                                success, result_url = save_passbook_to_sheets(sheets_client, sheet_id, data)
+                            
+                            if success:
+                                st.success(f"✅ Saved to Google Sheets!")
+                                st.markdown(f"[📊 Open Spreadsheet]({result_url})")
+                            else:
+                                st.warning(f"Could not save to Sheets: {result_url}")
+                        else:
+                            st.warning("Could not connect to Google Sheets")
+                    except Exception as e:
+                        st.warning(f"Sheets error: {e}")
+            else:
+                st.info("💡 Add Spreadsheet ID in sidebar to auto-save to Google Sheets")
     
     elif uploaded_file:
         if not credentials_json:
@@ -545,7 +707,6 @@ if 'extracted_data' in st.session_state and 'result_type' in st.session_state:
             st.markdown("### 📝 Subject-wise Marks")
             subjects_df = pd.DataFrame(data['subjects'])
             subjects_df.columns = ['Subject', 'Marks Obtained', 'Max Marks']
-            # Convert to numeric to handle string values
             subjects_df['Marks Obtained'] = pd.to_numeric(subjects_df['Marks Obtained'], errors='coerce').fillna(0)
             subjects_df['Max Marks'] = pd.to_numeric(subjects_df['Max Marks'], errors='coerce').fillna(100)
             subjects_df['Percentage'] = (subjects_df['Marks Obtained'] / subjects_df['Max Marks'] * 100).round(1)
@@ -562,7 +723,6 @@ if 'extracted_data' in st.session_state and 'result_type' in st.session_state:
         </div>
         """, unsafe_allow_html=True)
         
-        # Account holder info
         st.markdown("### 👤 Account Holder Details")
         col1, col2 = st.columns(2)
         
@@ -582,7 +742,6 @@ if 'extracted_data' in st.session_state and 'result_type' in st.session_state:
             </div>
             """, unsafe_allow_html=True)
         
-        # Bank details
         st.markdown("### 🏛️ Bank Details")
         
         bank_details = [
@@ -599,20 +758,9 @@ if 'extracted_data' in st.session_state and 'result_type' in st.session_state:
             with col1 if i % 2 == 0 else col2:
                 st.markdown(f"**{label}:** {value or 'N/A'}")
         
-        # Address
         if data.get('branch_address'):
             st.markdown("### 📍 Branch Address")
             st.info(data.get('branch_address'))
-        
-        # Contact info
-        if data.get('phone_number') or data.get('email') or data.get('nominee_name'):
-            st.markdown("### 📞 Additional Info")
-            if data.get('phone_number'):
-                st.markdown(f"**Phone:** {data.get('phone_number')}")
-            if data.get('email'):
-                st.markdown(f"**Email:** {data.get('email')}")
-            if data.get('nominee_name'):
-                st.markdown(f"**Nominee:** {data.get('nominee_name')}")
     
     # Download buttons
     st.markdown("### 💾 Download Data")
@@ -629,7 +777,6 @@ if 'extracted_data' in st.session_state and 'result_type' in st.session_state:
         )
     
     with col2:
-        # Create CSV from data
         if result_type == 'marksheet' and data.get('subjects'):
             csv = pd.DataFrame(data['subjects']).to_csv(index=False)
         else:
@@ -643,18 +790,17 @@ if 'extracted_data' in st.session_state and 'result_type' in st.session_state:
             use_container_width=True
         )
     
-    # Raw data expanders
     with st.expander("🔍 View Raw JSON"):
         st.code(st.session_state['raw_json'], language='json')
     
     with st.expander("📄 View Extracted OCR Text"):
-        st.text(st.session_state.get('raw_text', 'No text extracted'))
+        st.text(st.session_state.get('raw_text', 'No text'))
 
 # Footer
 st.markdown("""
 <div class="footer">
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
-    <p style="font-size: 0.8rem;">Hybrid Mode: Google Vision (FREE) + Claude (Smart)</p>
+    <p style="font-size: 0.8rem;">Auto-saves to Google Sheets 📊</p>
 </div>
 """, unsafe_allow_html=True)
 
