@@ -226,26 +226,32 @@ Parse this text and extract the marks information. Return ONLY a valid JSON obje
 
 {{
     "student_name": "Name of the student",
-    "roll_number": "Roll number if present",
-    "class": "Class/Grade if present",
+    "roll_number": "Roll number or Register number if present",
+    "class": "Class/Grade/Semester if present",
     "school": "School/College name if present",
-    "exam": "Exam name if present",
+    "exam": "Exam name or Month/Year if present",
     "subjects": [
         {{
-            "subject_name": "Subject name",
-            "marks_obtained": number,
-            "max_marks": number
+            "subject_name": "Subject name (can be long, include full name)",
+            "marks_obtained": number (use TOTAL marks if CA/ESE/TOTAL columns exist, otherwise use the main marks column),
+            "max_marks": number (usually 100)
         }}
     ],
-    "total_marks_obtained": number,
-    "total_max_marks": number,
+    "total_marks_obtained": number (sum of all subject marks),
+    "total_max_marks": number (sum of max marks),
     "percentage": number,
     "grade": "Grade if present",
     "result": "Pass/Fail if present"
 }}
 
-If any field is not found in the text, use null for that field.
-Extract ALL subjects with their marks that you can find in the text."""
+IMPORTANT INSTRUCTIONS:
+1. If the marksheet has columns like CA (Continuous Assessment), ESE (End Semester Exam), and TOTAL - use the TOTAL column value for marks_obtained
+2. Extract ALL subjects - do not skip any subject even if the name is very long
+3. Subject names like "Software Project Management and Entrepreneurship" should be extracted fully
+4. If marks are shown as "100" use 100 as the number, not 0
+5. Look for rows that have subject codes (like CSN51, CSN52, etc.) to identify subjects
+6. The "Total" row at the bottom is the overall total, not a subject - use it for total_marks_obtained
+7. All marks_obtained values must be actual numbers from the marksheet, never 0 unless actually 0"""
         }]
     )
     
