@@ -539,6 +539,9 @@ if 'extracted_data' in st.session_state and 'result_type' in st.session_state:
             st.markdown("### 📝 Subject-wise Marks")
             subjects_df = pd.DataFrame(data['subjects'])
             subjects_df.columns = ['Subject', 'Marks Obtained', 'Max Marks']
+            # Convert to numeric to handle string values
+            subjects_df['Marks Obtained'] = pd.to_numeric(subjects_df['Marks Obtained'], errors='coerce').fillna(0)
+            subjects_df['Max Marks'] = pd.to_numeric(subjects_df['Max Marks'], errors='coerce').fillna(100)
             subjects_df['Percentage'] = (subjects_df['Marks Obtained'] / subjects_df['Max Marks'] * 100).round(1)
             st.dataframe(subjects_df, use_container_width=True, hide_index=True)
     
