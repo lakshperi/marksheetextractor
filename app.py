@@ -293,16 +293,23 @@ def save_marksheet_to_sheets(sheets_client, spreadsheet_id, data, filename):
     try:
         spreadsheet = sheets_client.open_by_key(spreadsheet_id)
         
+        headers = [
+            "Timestamp", "Filename", "Student Name", "Roll Number", "School/College",
+            "Class/Semester", "Exam", "Total Marks", "Max Marks",
+            "Percentage", "Result", "Subjects & Marks"
+        ]
+        
         try:
             worksheet = spreadsheet.worksheet("Marksheets")
+            # Check if headers exist, if not add them
+            first_row = worksheet.row_values(1)
+            if not first_row or first_row[0] != "Timestamp":
+                worksheet.insert_row(headers, 1)
         except gspread.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title="Marksheets", rows=1000, cols=20)
-            headers = [
-                "Timestamp", "Filename", "Student Name", "Roll Number", "School/College",
-                "Class/Semester", "Exam", "Total Marks", "Max Marks",
-                "Percentage", "Result", "Subjects & Marks"
-            ]
             worksheet.append_row(headers)
+            # Format headers (bold)
+            worksheet.format('A1:L1', {'textFormat': {'bold': True}})
         
         subjects_str = ""
         if data.get('subjects'):
@@ -338,16 +345,23 @@ def save_passbook_to_sheets(sheets_client, spreadsheet_id, data, filename):
     try:
         spreadsheet = sheets_client.open_by_key(spreadsheet_id)
         
+        headers = [
+            "Timestamp", "Filename", "Account Holder", "Account Number", "Bank Name",
+            "Branch Name", "IFSC Code", "MICR Code", "Customer ID",
+            "Account Type", "Branch Address"
+        ]
+        
         try:
             worksheet = spreadsheet.worksheet("Passbooks")
+            # Check if headers exist, if not add them
+            first_row = worksheet.row_values(1)
+            if not first_row or first_row[0] != "Timestamp":
+                worksheet.insert_row(headers, 1)
         except gspread.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title="Passbooks", rows=1000, cols=15)
-            headers = [
-                "Timestamp", "Filename", "Account Holder", "Account Number", "Bank Name",
-                "Branch Name", "IFSC Code", "MICR Code", "Customer ID",
-                "Account Type", "Branch Address"
-            ]
             worksheet.append_row(headers)
+            # Format headers (bold)
+            worksheet.format('A1:K1', {'textFormat': {'bold': True}})
         
         row = [
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
