@@ -1,6 +1,6 @@
 """
-Document Extractor - Batch Processing from Google Drive
-Reads all files from a Drive folder, extracts data, saves to Google Sheets
+Document Extractor - Dual Folder Batch Processing
+Separate folders for Marksheets & Passbooks → Saves to different Sheet tabs
 """
 
 import streamlit as st
@@ -29,9 +29,7 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
     
-    .stApp {
-        font-family: 'Outfit', sans-serif;
-    }
+    .stApp { font-family: 'Outfit', sans-serif; }
     
     .main-header {
         background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 50%, #3d7ab5 100%);
@@ -42,18 +40,18 @@ st.markdown("""
         box-shadow: 0 8px 32px rgba(30, 58, 95, 0.3);
     }
     
-    .main-header h1 {
-        color: white;
-        font-size: 2.5rem;
-        font-weight: 700;
-        margin: 0;
+    .main-header h1 { color: white; font-size: 2.2rem; font-weight: 700; margin: 0; }
+    .main-header p { color: #b8d4e8; font-size: 1rem; margin-top: 0.5rem; }
+    
+    .folder-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        margin-bottom: 1rem;
     }
     
-    .main-header p {
-        color: #b8d4e8;
-        font-size: 1.1rem;
-        margin-top: 0.5rem;
-    }
+    .folder-card h3 { margin: 0 0 1rem 0; color: #1e3a5f; }
     
     .stat-card {
         background: white;
@@ -63,32 +61,8 @@ st.markdown("""
         box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
     
-    .stat-number {
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: #1e3a5f;
-    }
-    
-    .stat-label {
-        color: #64748b;
-        font-size: 0.9rem;
-    }
-    
-    .file-item {
-        background: #f8fafc;
-        padding: 0.75rem 1rem;
-        border-radius: 8px;
-        margin: 0.5rem 0;
-        border-left: 3px solid #3d7ab5;
-    }
-    
-    .success-item {
-        border-left-color: #22c55e;
-    }
-    
-    .error-item {
-        border-left-color: #ef4444;
-    }
+    .stat-number { font-size: 2rem; font-weight: 700; color: #1e3a5f; }
+    .stat-label { color: #64748b; font-size: 0.9rem; }
     
     .stButton > button {
         background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
@@ -100,6 +74,9 @@ st.markdown("""
         border-radius: 10px;
         width: 100%;
     }
+    
+    .success-text { color: #22c55e; }
+    .error-text { color: #ef4444; }
     
     .footer {
         text-align: center;
@@ -114,15 +91,17 @@ st.markdown("""
 st.markdown("""
 <div class="main-header">
     <h1>📁 Batch Document Extractor</h1>
-    <p>Process all files from Google Drive folder → Save to Google Sheets</p>
+    <p>Separate folders for Marksheets & Passbooks → Auto-save to Google Sheets</p>
 </div>
 """, unsafe_allow_html=True)
 
 
+# ============ HELPER FUNCTIONS ============
+
 def get_credentials(credentials_json):
     """Create credentials object with all required scopes."""
     credentials_dict = json.loads(credentials_json)
-    credentials = service_account.Credentials.from_service_account_info(
+    return service_account.Credentials.from_service_account_info(
         credentials_dict,
         scopes=[
             'https://www.googleapis.com/auth/spreadsheets',
@@ -130,26 +109,25 @@ def get_credentials(credentials_json):
             'https://www.googleapis.com/auth/cloud-vision'
         ]
     )
-    return credentials
 
 
 def get_drive_service(credentials):
-    """Create Google Drive service."""
     return build('drive', 'v3', credentials=credentials)
 
 
 def get_vision_client(credentials):
-    """Create Google Vision client."""
     return vision.ImageAnnotatorClient(credentials=credentials)
 
 
 def get_sheets_client(credentials):
-    """Create Google Sheets client."""
     return gspread.authorize(credentials)
 
 
 def list_files_in_folder(drive_service, folder_id):
     """List all supported files in a Google Drive folder."""
+    if not folder_id:
+        return []
+    
     supported_types = [
         'application/pdf',
         'image/jpeg',
@@ -159,7 +137,6 @@ def list_files_in_folder(drive_service, folder_id):
     ]
     
     query = f"'{folder_id}' in parents and trashed = false"
-    
     files = []
     page_token = None
     
@@ -206,7 +183,7 @@ def pdf_to_image(pdf_bytes):
         img_bytes = pix.tobytes("png")
         pdf_document.close()
         return img_bytes
-    except Exception as e:
+    except:
         return None
 
 
@@ -220,6 +197,8 @@ def extract_text_with_vision(image_bytes, vision_client):
     
     return response.full_text_annotation.text
 
+
+# ============ MARKSHEET FUNCTIONS ============
 
 def parse_marksheet_with_claude(extracted_text, api_key):
     """Parse marksheet text with Claude."""
@@ -250,38 +229,7 @@ Return this exact JSON structure:
     "result": "PASS/FAIL"
 }}
 
-IMPORTANT: Use TOTAL column if CA/ESE/TOTAL exists. Extract ALL subjects. Never use 0 unless actually 0."""
-        }]
-    )
-    
-    return response.content[0].text
-
-
-def parse_passbook_with_claude(extracted_text, api_key):
-    """Parse passbook text with Claude."""
-    client = anthropic.Anthropic(api_key=api_key)
-    
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2048,
-        messages=[{
-            "role": "user",
-            "content": f"""Parse this bank passbook text. Return ONLY valid JSON:
-
-{extracted_text}
-
-Return this exact JSON structure:
-{{
-    "account_holder_name": "Name",
-    "account_number": "Account number",
-    "ifsc_code": "IFSC code",
-    "micr_code": "MICR code",
-    "customer_id": "Customer ID",
-    "branch_name": "Branch name",
-    "branch_address": "Address",
-    "bank_name": "Bank name",
-    "account_type": "Savings/Current"
-}}"""
+IMPORTANT: Use TOTAL column if CA/ESE/TOTAL exists. Extract ALL subjects with full names. Never use 0 unless actually 0."""
         }]
     )
     
@@ -301,14 +249,13 @@ def save_marksheet_to_sheets(sheets_client, spreadsheet_id, data, filename):
         
         try:
             worksheet = spreadsheet.worksheet("Marksheets")
-            # Check if headers exist, if not add them
             first_row = worksheet.row_values(1)
             if not first_row or first_row[0] != "Timestamp":
                 worksheet.insert_row(headers, 1)
+                worksheet.format('A1:L1', {'textFormat': {'bold': True}})
         except gspread.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title="Marksheets", rows=1000, cols=20)
             worksheet.append_row(headers)
-            # Format headers (bold)
             worksheet.format('A1:L1', {'textFormat': {'bold': True}})
         
         subjects_str = ""
@@ -337,7 +284,43 @@ def save_marksheet_to_sheets(sheets_client, spreadsheet_id, data, filename):
         return True
         
     except Exception as e:
+        st.error(f"Sheets error: {e}")
         return False
+
+
+# ============ PASSBOOK FUNCTIONS ============
+
+def parse_passbook_with_claude(extracted_text, api_key):
+    """Parse passbook text with Claude."""
+    client = anthropic.Anthropic(api_key=api_key)
+    
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        messages=[{
+            "role": "user",
+            "content": f"""Parse this bank passbook text. Return ONLY valid JSON:
+
+{extracted_text}
+
+Return this exact JSON structure:
+{{
+    "account_holder_name": "Name",
+    "account_number": "Account number",
+    "ifsc_code": "IFSC code (11 chars, starts with 4 letters)",
+    "micr_code": "MICR code (9 digits)",
+    "customer_id": "Customer ID/CIF number",
+    "branch_name": "Branch name",
+    "branch_address": "Full address",
+    "bank_name": "Bank name",
+    "account_type": "Savings/Current"
+}}
+
+Look carefully for IFSC (like SBIN0001234), MICR (9 digits), account numbers."""
+        }]
+    )
+    
+    return response.content[0].text
 
 
 def save_passbook_to_sheets(sheets_client, spreadsheet_id, data, filename):
@@ -353,14 +336,13 @@ def save_passbook_to_sheets(sheets_client, spreadsheet_id, data, filename):
         
         try:
             worksheet = spreadsheet.worksheet("Passbooks")
-            # Check if headers exist, if not add them
             first_row = worksheet.row_values(1)
             if not first_row or first_row[0] != "Timestamp":
                 worksheet.insert_row(headers, 1)
+                worksheet.format('A1:K1', {'textFormat': {'bold': True}})
         except gspread.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title="Passbooks", rows=1000, cols=15)
             worksheet.append_row(headers)
-            # Format headers (bold)
             worksheet.format('A1:K1', {'textFormat': {'bold': True}})
         
         row = [
@@ -381,233 +363,358 @@ def save_passbook_to_sheets(sheets_client, spreadsheet_id, data, filename):
         return True
         
     except Exception as e:
+        st.error(f"Sheets error: {e}")
         return False
 
 
-# Get secrets
+# ============ BATCH PROCESSING ============
+
+def process_batch(files, doc_type, drive_service, vision_client, sheets_client, 
+                  api_key, sheet_id, progress_bar, status_text):
+    """Process a batch of files."""
+    successful = 0
+    failed = 0
+    results = []
+    
+    for i, file in enumerate(files):
+        filename = file['name']
+        status_text.markdown(f"**Processing ({i+1}/{len(files)}):** {filename}")
+        
+        try:
+            # Download file
+            file_bytes = download_file(drive_service, file['id'])
+            
+            # Convert PDF to image if needed
+            if file['mimeType'] == 'application/pdf':
+                image_bytes = pdf_to_image(file_bytes)
+                if not image_bytes:
+                    raise Exception("Could not convert PDF")
+            else:
+                image_bytes = file_bytes
+            
+            # Extract text with Vision
+            extracted_text = extract_text_with_vision(image_bytes, vision_client)
+            
+            # Parse with Claude
+            if doc_type == "marksheet":
+                result = parse_marksheet_with_claude(extracted_text, api_key)
+            else:
+                result = parse_passbook_with_claude(extracted_text, api_key)
+            
+            # Clean JSON
+            clean_result = result.strip()
+            if clean_result.startswith("```"):
+                clean_result = clean_result.split("\n", 1)[1] if "\n" in clean_result else clean_result[3:]
+            if clean_result.endswith("```"):
+                clean_result = clean_result[:-3]
+            clean_result = clean_result.strip()
+            
+            data = json.loads(clean_result)
+            
+            # Save to sheets
+            if doc_type == "marksheet":
+                save_marksheet_to_sheets(sheets_client, sheet_id, data, filename)
+                name = data.get('student_name', 'Unknown')
+            else:
+                save_passbook_to_sheets(sheets_client, sheet_id, data, filename)
+                name = data.get('account_holder_name', 'Unknown')
+            
+            successful += 1
+            results.append({"file": filename, "status": "✅", "name": name})
+            
+        except Exception as e:
+            failed += 1
+            results.append({"file": filename, "status": "❌", "name": str(e)[:50]})
+        
+        progress_bar.progress((i + 1) / len(files))
+        time.sleep(0.5)  # Rate limit
+    
+    return successful, failed, results
+
+
+# ============ GET SECRETS ============
+
 def get_secret(key):
     try:
         return st.secrets[key]
-    except (KeyError, FileNotFoundError):
+    except:
         return None
 
 
 google_creds = get_secret("GOOGLE_CREDENTIALS")
 anthropic_key = get_secret("ANTHROPIC_API_KEY")
 spreadsheet_id = get_secret("GOOGLE_SPREADSHEET_ID")
-default_folder_id = get_secret("GOOGLE_DRIVE_FOLDER_ID")
+marksheet_folder = get_secret("MARKSHEET_FOLDER_ID")
+passbook_folder = get_secret("PASSBOOK_FOLDER_ID")
 
-# Sidebar
+
+# ============ SIDEBAR ============
+
 with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     
     if google_creds:
-        st.success("✅ Google Cloud configured")
+        st.success("✅ Google Cloud")
         credentials_json = google_creds
     else:
         credentials_file = st.file_uploader("Google Credentials JSON", type=['json'])
         credentials_json = credentials_file.getvalue().decode('utf-8') if credentials_file else None
     
     if anthropic_key:
-        st.success("✅ Claude API configured")
+        st.success("✅ Claude API")
         api_key = anthropic_key
     else:
         api_key = st.text_input("Anthropic API Key", type="password")
     
     if spreadsheet_id:
-        st.success("✅ Spreadsheet configured")
+        st.success("✅ Spreadsheet")
         sheet_id = spreadsheet_id
     else:
         sheet_id = st.text_input("Google Spreadsheet ID")
     
     st.markdown("---")
-    st.markdown("### 📊 Links")
     if sheet_id:
         st.markdown(f"[📊 Open Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id})")
     
     st.markdown("---")
-    st.markdown("### 💡 How to get Folder ID")
-    st.markdown("""
-    1. Open folder in Google Drive
-    2. Copy ID from URL:
-    `drive.google.com/drive/folders/`**`FOLDER_ID`**
-    """)
+    st.markdown("### 💡 Folder ID")
+    st.markdown("Get from URL: `drive.google.com/drive/folders/`**`ID`**")
 
 
-# Main content
-st.markdown("### 📁 Google Drive Folder")
+# ============ MAIN CONTENT ============
 
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    folder_id = st.text_input(
-        "Enter Google Drive Folder ID",
-        value=default_folder_id or "",
-        placeholder="1abc123xyz...",
-        help="The folder ID from your Google Drive URL"
-    )
-
-with col2:
-    doc_type = st.selectbox("Document Type", ["📚 Marksheets", "🏦 Passbooks"])
-
-# Process button
-if folder_id and credentials_json and api_key and sheet_id:
-    
-    # Initialize credentials and services
+# Initialize services
+services_ready = False
+if credentials_json and api_key and sheet_id:
     try:
         credentials = get_credentials(credentials_json)
         drive_service = get_drive_service(credentials)
         vision_client = get_vision_client(credentials)
         sheets_client = get_sheets_client(credentials)
+        services_ready = True
     except Exception as e:
-        st.error(f"Failed to initialize services: {e}")
-        st.stop()
-    
-    # List files
-    with st.spinner("📂 Scanning folder..."):
-        try:
-            files = list_files_in_folder(drive_service, folder_id)
-        except Exception as e:
-            st.error(f"Could not access folder: {e}")
-            st.error("Make sure the folder is shared with your service account email!")
-            st.stop()
-    
-    if not files:
-        st.warning("No supported files found in the folder (PDF, JPG, PNG, GIF, WEBP)")
-    else:
-        st.success(f"Found **{len(files)}** files to process")
-        
-        # Show file list
-        with st.expander(f"📄 Files found ({len(files)})", expanded=True):
-            for f in files:
-                st.markdown(f"- {f['name']}")
-        
-        # Process button
-        if st.button(f"🚀 Process All {len(files)} Files", use_container_width=True):
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            results_container = st.container()
-            
-            successful = 0
-            failed = 0
-            results = []
-            
-            for i, file in enumerate(files):
-                filename = file['name']
-                status_text.markdown(f"**Processing ({i+1}/{len(files)}):** {filename}")
-                
-                try:
-                    # Download file
-                    file_bytes = download_file(drive_service, file['id'])
-                    
-                    # Convert PDF to image if needed
-                    if file['mimeType'] == 'application/pdf':
-                        image_bytes = pdf_to_image(file_bytes)
-                        if not image_bytes:
-                            raise Exception("Could not convert PDF")
-                    else:
-                        image_bytes = file_bytes
-                    
-                    # Extract text with Vision
-                    extracted_text = extract_text_with_vision(image_bytes, vision_client)
-                    
-                    # Parse with Claude
-                    if "Marksheet" in doc_type:
-                        result = parse_marksheet_with_claude(extracted_text, api_key)
-                    else:
-                        result = parse_passbook_with_claude(extracted_text, api_key)
-                    
-                    # Clean JSON
-                    clean_result = result.strip()
-                    if clean_result.startswith("```"):
-                        clean_result = clean_result.split("\n", 1)[1] if "\n" in clean_result else clean_result[3:]
-                    if clean_result.endswith("```"):
-                        clean_result = clean_result[:-3]
-                    clean_result = clean_result.strip()
-                    
-                    data = json.loads(clean_result)
-                    
-                    # Save to sheets
-                    if "Marksheet" in doc_type:
-                        save_marksheet_to_sheets(sheets_client, sheet_id, data, filename)
-                        student_name = data.get('student_name', 'Unknown')
-                    else:
-                        save_passbook_to_sheets(sheets_client, sheet_id, data, filename)
-                        student_name = data.get('account_holder_name', 'Unknown')
-                    
-                    successful += 1
-                    results.append({"file": filename, "status": "✅", "name": student_name})
-                    
-                except Exception as e:
-                    failed += 1
-                    results.append({"file": filename, "status": "❌", "name": str(e)[:50]})
-                
-                # Update progress
-                progress_bar.progress((i + 1) / len(files))
-                
-                # Small delay to avoid rate limits
-                time.sleep(0.5)
-            
-            # Final status
-            status_text.empty()
-            progress_bar.empty()
-            
-            # Summary
-            st.markdown("---")
-            st.markdown("## 📊 Processing Complete!")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-number">{len(files)}</div>
-                    <div class="stat-label">Total Files</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col2:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-number" style="color:#22c55e">{successful}</div>
-                    <div class="stat-label">Successful</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col3:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-number" style="color:#ef4444">{failed}</div>
-                    <div class="stat-label">Failed</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Results table
-            st.markdown("### 📋 Results")
-            results_df = pd.DataFrame(results)
-            results_df.columns = ['Filename', 'Status', 'Name/Error']
-            st.dataframe(results_df, use_container_width=True, hide_index=True)
-            
-            # Link to spreadsheet
-            st.markdown(f"### 📊 [Open Google Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id})")
+        st.error(f"Failed to initialize: {e}")
 
-else:
-    st.info("👆 Please configure all settings in the sidebar and enter a folder ID")
+if not services_ready:
+    st.warning("⚠️ Please configure all settings in the sidebar")
+    st.stop()
+
+
+# Two columns for the two folder types
+col1, col2 = st.columns(2)
+
+# ============ MARKSHEETS SECTION ============
+with col1:
+    st.markdown("""
+    <div class="folder-card">
+        <h3>📚 Marksheets Folder</h3>
+    </div>
+    """, unsafe_allow_html=True)
     
-    st.markdown("### 📋 Setup Checklist")
-    st.markdown(f"""
-    - {'✅' if google_creds else '❌'} Google Cloud Credentials
-    - {'✅' if anthropic_key else '❌'} Anthropic API Key  
-    - {'✅' if sheet_id else '❌'} Google Spreadsheet ID
-    - {'✅' if folder_id else '❌'} Google Drive Folder ID
-    """)
+    marksheet_folder_id = st.text_input(
+        "Marksheets Folder ID",
+        value=marksheet_folder or "",
+        placeholder="Enter folder ID...",
+        key="marksheet_folder"
+    )
+    
+    marksheet_files = []
+    if marksheet_folder_id:
+        try:
+            marksheet_files = list_files_in_folder(drive_service, marksheet_folder_id)
+            if marksheet_files:
+                st.success(f"Found **{len(marksheet_files)}** files")
+                with st.expander("View files"):
+                    for f in marksheet_files:
+                        st.markdown(f"- {f['name']}")
+            else:
+                st.info("No files found")
+        except Exception as e:
+            st.error(f"Error: {e}")
+    
+    process_marksheets = st.button("🚀 Process Marksheets", key="btn_marksheets", 
+                                    disabled=not marksheet_files, use_container_width=True)
+
+
+# ============ PASSBOOKS SECTION ============
+with col2:
+    st.markdown("""
+    <div class="folder-card">
+        <h3>🏦 Passbooks Folder</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    passbook_folder_id = st.text_input(
+        "Passbooks Folder ID",
+        value=passbook_folder or "",
+        placeholder="Enter folder ID...",
+        key="passbook_folder"
+    )
+    
+    passbook_files = []
+    if passbook_folder_id:
+        try:
+            passbook_files = list_files_in_folder(drive_service, passbook_folder_id)
+            if passbook_files:
+                st.success(f"Found **{len(passbook_files)}** files")
+                with st.expander("View files"):
+                    for f in passbook_files:
+                        st.markdown(f"- {f['name']}")
+            else:
+                st.info("No files found")
+        except Exception as e:
+            st.error(f"Error: {e}")
+    
+    process_passbooks = st.button("🚀 Process Passbooks", key="btn_passbooks",
+                                   disabled=not passbook_files, use_container_width=True)
+
+
+# ============ PROCESS ALL BUTTON ============
+st.markdown("---")
+
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    process_all = st.button("🚀 Process ALL Documents", 
+                            disabled=not (marksheet_files or passbook_files),
+                            use_container_width=True)
+
+
+# ============ PROCESSING LOGIC ============
+
+def show_results(doc_type, successful, failed, results):
+    """Display processing results."""
+    st.markdown(f"### {'📚 Marksheets' if doc_type == 'marksheet' else '🏦 Passbooks'} Results")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"<p class='success-text'>✅ Successful: {successful}</p>", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<p class='error-text'>❌ Failed: {failed}</p>", unsafe_allow_html=True)
+    
+    if results:
+        df = pd.DataFrame(results)
+        df.columns = ['Filename', 'Status', 'Name/Error']
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+# Process Marksheets Only
+if process_marksheets and marksheet_files:
+    st.markdown("---")
+    st.markdown("## Processing Marksheets...")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    successful, failed, results = process_batch(
+        marksheet_files, "marksheet", drive_service, vision_client, 
+        sheets_client, api_key, sheet_id, progress_bar, status_text
+    )
+    
+    status_text.empty()
+    progress_bar.empty()
+    
+    show_results("marksheet", successful, failed, results)
+    st.markdown(f"[📊 Open Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id})")
+
+
+# Process Passbooks Only
+if process_passbooks and passbook_files:
+    st.markdown("---")
+    st.markdown("## Processing Passbooks...")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    successful, failed, results = process_batch(
+        passbook_files, "passbook", drive_service, vision_client,
+        sheets_client, api_key, sheet_id, progress_bar, status_text
+    )
+    
+    status_text.empty()
+    progress_bar.empty()
+    
+    show_results("passbook", successful, failed, results)
+    st.markdown(f"[📊 Open Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id})")
+
+
+# Process All
+if process_all:
+    st.markdown("---")
+    
+    total_successful = 0
+    total_failed = 0
+    
+    # Process Marksheets
+    if marksheet_files:
+        st.markdown("## 📚 Processing Marksheets...")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        successful, failed, results = process_batch(
+            marksheet_files, "marksheet", drive_service, vision_client,
+            sheets_client, api_key, sheet_id, progress_bar, status_text
+        )
+        
+        status_text.empty()
+        progress_bar.empty()
+        show_results("marksheet", successful, failed, results)
+        
+        total_successful += successful
+        total_failed += failed
+    
+    # Process Passbooks
+    if passbook_files:
+        st.markdown("## 🏦 Processing Passbooks...")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        successful, failed, results = process_batch(
+            passbook_files, "passbook", drive_service, vision_client,
+            sheets_client, api_key, sheet_id, progress_bar, status_text
+        )
+        
+        status_text.empty()
+        progress_bar.empty()
+        show_results("passbook", successful, failed, results)
+        
+        total_successful += successful
+        total_failed += failed
+    
+    # Final Summary
+    st.markdown("---")
+    st.markdown("## 🎉 All Processing Complete!")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{len(marksheet_files) + len(passbook_files)}</div>
+            <div class="stat-label">Total Files</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number" style="color:#22c55e">{total_successful}</div>
+            <div class="stat-label">Successful</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number" style="color:#ef4444">{total_failed}</div>
+            <div class="stat-label">Failed</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown(f"### [📊 Open Google Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id})")
+
 
 # Footer
 st.markdown("""
 <div class="footer">
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
-    <p style="font-size: 0.8rem;">Batch Processing: Drive → Vision → Claude → Sheets</p>
+    <p style="font-size: 0.8rem;">Marksheets → "Marksheets" tab | Passbooks → "Passbooks" tab</p>
 </div>
 """, unsafe_allow_html=True)
 
