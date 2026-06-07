@@ -1,6 +1,7 @@
 """
 Document Extractor - Dual Folder Batch Processing
 Separate folders for Marksheets & Passbooks → Saves to different Sheet tabs
+Skips already-processed files and watermarks new files in Google Drive
 """
 
 import streamlit as st
@@ -11,11 +12,14 @@ import fitz  # PyMuPDF for PDF processing
 from google.cloud import vision
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from PIL import Image, ImageDraw, ImageFont
 import gspread
 from datetime import datetime
 import io
 import time
+
+WATERMARK_TEXT = "PROCESSED"
 
 # Page configuration
 st.set_page_config(
@@ -91,7 +95,7 @@ st.markdown("""
 st.markdown("""
 <div class="main-header">
     <h1>📁 Batch Document Extractor</h1>
-    <p>Separate folders for Marksheets & Passbooks → Auto-save to Google Sheets</p>
+    <p>Process only new files → Auto-save to Google Sheets → Watermark in Drive</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -105,7 +109,7 @@ def get_credentials(credentials_json):
         credentials_dict,
         scopes=[
             'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive.readonly',
+            'https://www.googleapis.com/auth/drive',
             'https://www.googleapis.com/auth/cloud-vision'
         ]
     )
@@ -185,6 +189,71 @@ def pdf_to_image(pdf_bytes):
         return img_bytes
     except:
         return None
+
+
+def add_watermark_to_image(image_bytes, mime_type, text=WATERMARK_TEXT):
+    """Add a diagonal watermark to an image file."""
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    font_size = max(img.size) // 12
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+    except OSError:
+        font = ImageFont.load_default()
+
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    stamp = Image.new("RGBA", (text_w + 20, text_h + 20), (0, 0, 0, 0))
+    stamp_draw = ImageDraw.Draw(stamp)
+    stamp_draw.text((10, 10), text, font=font, fill=(200, 40, 40, 120))
+    stamp = stamp.rotate(45, expand=True)
+
+    x = (img.width - stamp.width) // 2
+    y = (img.height - stamp.height) // 2
+    overlay.paste(stamp, (x, y), stamp)
+    result = Image.alpha_composite(img, overlay)
+
+    output = io.BytesIO()
+    if mime_type == "image/png":
+        result.save(output, format="PNG")
+    else:
+        result.convert("RGB").save(output, format="JPEG", quality=95)
+    return output.getvalue()
+
+
+def add_watermark_to_pdf(pdf_bytes, text=WATERMARK_TEXT):
+    """Add a diagonal watermark to each page of a PDF."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    for page in doc:
+        rect = page.rect
+        page.insert_text(
+            (rect.width / 2 - 100, rect.height / 2),
+            text,
+            fontsize=48,
+            color=(0.85, 0.2, 0.2),
+            rotate=45,
+            overlay=True,
+        )
+    output = doc.tobytes()
+    doc.close()
+    return output
+
+
+def apply_watermark_and_upload(drive_service, file_id, file_bytes, mime_type):
+    """Watermark a file and upload it back to Google Drive."""
+    if mime_type == "application/pdf":
+        watermarked = add_watermark_to_pdf(file_bytes)
+    elif mime_type.startswith("image/"):
+        watermarked = add_watermark_to_image(file_bytes, mime_type)
+    else:
+        return False
+
+    media = MediaIoBaseUpload(io.BytesIO(watermarked), mimetype=mime_type, resumable=True)
+    drive_service.files().update(fileId=file_id, media_body=media).execute()
+    return True
 
 
 def extract_text_with_vision(image_bytes, vision_client):
@@ -367,68 +436,121 @@ def save_passbook_to_sheets(sheets_client, spreadsheet_id, data, filename):
         return False
 
 
+# ============ TRACKING PROCESSED FILES ============
+
+def get_processed_file_ids(sheets_client, spreadsheet_id):
+    """Get list of already processed file IDs from tracking sheet."""
+    try:
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+
+        try:
+            tracking_sheet = spreadsheet.worksheet("_ProcessedFiles")
+            file_ids = tracking_sheet.col_values(1)[1:]
+            return set(file_ids)
+        except gspread.WorksheetNotFound:
+            tracking_sheet = spreadsheet.add_worksheet(title="_ProcessedFiles", rows=5000, cols=4)
+            tracking_sheet.append_row(["File ID", "Filename", "Document Type", "Processed At"])
+            tracking_sheet.format('A1:D1', {'textFormat': {'bold': True}})
+            return set()
+    except Exception as e:
+        st.warning(f"Could not access tracking sheet: {e}")
+        return set()
+
+
+def mark_file_as_processed(sheets_client, spreadsheet_id, file_id, filename, doc_type):
+    """Mark a file as processed in the tracking sheet."""
+    try:
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+
+        try:
+            tracking_sheet = spreadsheet.worksheet("_ProcessedFiles")
+        except gspread.WorksheetNotFound:
+            tracking_sheet = spreadsheet.add_worksheet(title="_ProcessedFiles", rows=5000, cols=4)
+            tracking_sheet.append_row(["File ID", "Filename", "Document Type", "Processed At"])
+
+        tracking_sheet.append_row([
+            file_id,
+            filename,
+            doc_type,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ])
+        return True
+    except Exception:
+        return False
+
+
+def filter_new_files(files, processed_ids):
+    """Filter out already processed files."""
+    new_files = [f for f in files if f['id'] not in processed_ids]
+    skipped = len(files) - len(new_files)
+    return new_files, skipped
+
+
 # ============ BATCH PROCESSING ============
 
-def process_batch(files, doc_type, drive_service, vision_client, sheets_client, 
+def process_batch(files, doc_type, drive_service, vision_client, sheets_client,
                   api_key, sheet_id, progress_bar, status_text):
-    """Process a batch of files."""
+    """Process a batch of new files only."""
     successful = 0
     failed = 0
     results = []
-    
+
     for i, file in enumerate(files):
         filename = file['name']
+        file_id = file['id']
+        mime_type = file['mimeType']
         status_text.markdown(f"**Processing ({i+1}/{len(files)}):** {filename}")
-        
+
         try:
-            # Download file
-            file_bytes = download_file(drive_service, file['id'])
-            
-            # Convert PDF to image if needed
-            if file['mimeType'] == 'application/pdf':
+            file_bytes = download_file(drive_service, file_id)
+
+            if mime_type == 'application/pdf':
                 image_bytes = pdf_to_image(file_bytes)
                 if not image_bytes:
                     raise Exception("Could not convert PDF")
             else:
                 image_bytes = file_bytes
-            
-            # Extract text with Vision
+
             extracted_text = extract_text_with_vision(image_bytes, vision_client)
-            
-            # Parse with Claude
+
             if doc_type == "marksheet":
                 result = parse_marksheet_with_claude(extracted_text, api_key)
             else:
                 result = parse_passbook_with_claude(extracted_text, api_key)
-            
-            # Clean JSON
+
             clean_result = result.strip()
             if clean_result.startswith("```"):
                 clean_result = clean_result.split("\n", 1)[1] if "\n" in clean_result else clean_result[3:]
             if clean_result.endswith("```"):
                 clean_result = clean_result[:-3]
             clean_result = clean_result.strip()
-            
+
             data = json.loads(clean_result)
-            
-            # Save to sheets
+
             if doc_type == "marksheet":
                 save_marksheet_to_sheets(sheets_client, sheet_id, data, filename)
                 name = data.get('student_name', 'Unknown')
             else:
                 save_passbook_to_sheets(sheets_client, sheet_id, data, filename)
                 name = data.get('account_holder_name', 'Unknown')
-            
+
+            mark_file_as_processed(sheets_client, sheet_id, file_id, filename, doc_type)
+
+            try:
+                apply_watermark_and_upload(drive_service, file_id, file_bytes, mime_type)
+            except Exception as watermark_error:
+                name = f"{name} (watermark failed: {str(watermark_error)[:30]})"
+
             successful += 1
             results.append({"file": filename, "status": "✅", "name": name})
-            
+
         except Exception as e:
             failed += 1
             results.append({"file": filename, "status": "❌", "name": str(e)[:50]})
-        
+
         progress_bar.progress((i + 1) / len(files))
-        time.sleep(0.5)  # Rate limit
-    
+        time.sleep(0.5)
+
     return successful, failed, results
 
 
@@ -500,6 +622,9 @@ if not services_ready:
     st.stop()
 
 
+processed_ids = get_processed_file_ids(sheets_client, sheet_id)
+st.sidebar.markdown(f"**📊 Already processed:** {len(processed_ids)} files")
+
 # Two columns for the two folder types
 col1, col2 = st.columns(2)
 
@@ -519,20 +644,24 @@ with col1:
     )
     
     marksheet_files = []
+    marksheet_skipped = 0
     if marksheet_folder_id:
         try:
-            marksheet_files = list_files_in_folder(drive_service, marksheet_folder_id)
-            if marksheet_files:
-                st.success(f"Found **{len(marksheet_files)}** files")
-                with st.expander("View files"):
+            all_marksheet_files = list_files_in_folder(drive_service, marksheet_folder_id)
+            if all_marksheet_files:
+                marksheet_files, marksheet_skipped = filter_new_files(all_marksheet_files, processed_ids)
+                st.success(f"**{len(marksheet_files)}** new files to process")
+                if marksheet_skipped > 0:
+                    st.info(f"⏭️ Skipping {marksheet_skipped} already processed files")
+                with st.expander(f"View new files ({len(marksheet_files)})"):
                     for f in marksheet_files:
                         st.markdown(f"- {f['name']}")
             else:
-                st.info("No files found")
+                st.info("No files found in folder")
         except Exception as e:
             st.error(f"Error: {e}")
     
-    process_marksheets = st.button("🚀 Process Marksheets", key="btn_marksheets", 
+    process_marksheets = st.button("🚀 Process New Marksheets", key="btn_marksheets",
                                     disabled=not marksheet_files, use_container_width=True)
 
 
@@ -552,20 +681,24 @@ with col2:
     )
     
     passbook_files = []
+    passbook_skipped = 0
     if passbook_folder_id:
         try:
-            passbook_files = list_files_in_folder(drive_service, passbook_folder_id)
-            if passbook_files:
-                st.success(f"Found **{len(passbook_files)}** files")
-                with st.expander("View files"):
+            all_passbook_files = list_files_in_folder(drive_service, passbook_folder_id)
+            if all_passbook_files:
+                passbook_files, passbook_skipped = filter_new_files(all_passbook_files, processed_ids)
+                st.success(f"**{len(passbook_files)}** new files to process")
+                if passbook_skipped > 0:
+                    st.info(f"⏭️ Skipping {passbook_skipped} already processed files")
+                with st.expander(f"View new files ({len(passbook_files)})"):
                     for f in passbook_files:
                         st.markdown(f"- {f['name']}")
             else:
-                st.info("No files found")
+                st.info("No files found in folder")
         except Exception as e:
             st.error(f"Error: {e}")
     
-    process_passbooks = st.button("🚀 Process Passbooks", key="btn_passbooks",
+    process_passbooks = st.button("🚀 Process New Passbooks", key="btn_passbooks",
                                    disabled=not passbook_files, use_container_width=True)
 
 
@@ -574,7 +707,7 @@ st.markdown("---")
 
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    process_all = st.button("🚀 Process ALL Documents", 
+    process_all = st.button("🚀 Process ALL New Documents",
                             disabled=not (marksheet_files or passbook_files),
                             use_container_width=True)
 
@@ -689,7 +822,7 @@ if process_all:
         st.markdown(f"""
         <div class="stat-card">
             <div class="stat-number">{len(marksheet_files) + len(passbook_files)}</div>
-            <div class="stat-label">Total Files</div>
+            <div class="stat-label">New Files Processed</div>
         </div>
         """, unsafe_allow_html=True)
     with col2:
@@ -714,7 +847,7 @@ if process_all:
 st.markdown("""
 <div class="footer">
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
-    <p style="font-size: 0.8rem;">Marksheets → "Marksheets" tab | Passbooks → "Passbooks" tab</p>
+    <p style="font-size: 0.8rem;">Marksheets → "Marksheets" tab | Passbooks → "Passbooks" tab | Processed files tracked in "_ProcessedFiles" tab</p>
 </div>
 """, unsafe_allow_html=True)
 
