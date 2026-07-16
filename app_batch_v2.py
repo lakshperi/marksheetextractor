@@ -239,55 +239,50 @@ IMPORTANT: Use TOTAL column if CA/ESE/TOTAL exists. Extract ALL subjects with fu
 
 
 def save_marksheet_to_sheets(sheets_client, spreadsheet_id, data, filename, tab_name="Marksheets"):
-    """Save marksheet data to Google Sheets."""
+    """Save marksheet data to Google Sheets. Raises exception on failure."""
+    spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+    
+    headers = [
+        "Timestamp", "Filename", "Student Name", "Roll Number", "School/College",
+        "Class/Semester", "Exam", "Total Marks", "Max Marks",
+        "Percentage", "Result", "Subjects & Marks"
+    ]
+    
     try:
-        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
-        
-        headers = [
-            "Timestamp", "Filename", "Student Name", "Roll Number", "School/College",
-            "Class/Semester", "Exam", "Total Marks", "Max Marks",
-            "Percentage", "Result", "Subjects & Marks"
-        ]
-        
-        try:
-            worksheet = spreadsheet.worksheet(tab_name)
-            first_row = worksheet.row_values(1)
-            if not first_row or first_row[0] != "Timestamp":
-                worksheet.insert_row(headers, 1)
-                worksheet.format('A1:L1', {'textFormat': {'bold': True}})
-        except gspread.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=20)
-            worksheet.append_row(headers)
+        worksheet = spreadsheet.worksheet(tab_name)
+        first_row = worksheet.row_values(1)
+        if not first_row or first_row[0] != "Timestamp":
+            worksheet.insert_row(headers, 1)
             worksheet.format('A1:L1', {'textFormat': {'bold': True}})
-        
-        subjects_str = ""
-        if data.get('subjects'):
-            subjects_str = " | ".join([
-                f"{s.get('subject_name', 'N/A')}: {s.get('marks_obtained', 0)}/{s.get('max_marks', 100)}"
-                for s in data['subjects']
-            ])
-        
-        row = [
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            filename,
-            data.get('student_name') or 'N/A',
-            data.get('roll_number') or 'N/A',
-            data.get('school') or 'N/A',
-            data.get('class') or 'N/A',
-            data.get('exam') or 'N/A',
-            data.get('total_marks_obtained') or 0,
-            data.get('total_max_marks') or 0,
-            data.get('percentage') or 0,
-            data.get('result') or 'N/A',
-            subjects_str
-        ]
-        
-        worksheet.append_row(row, value_input_option='USER_ENTERED')
-        return True
-        
-    except Exception as e:
-        st.error(f"Sheets error: {e}")
-        return False
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=20)
+        worksheet.append_row(headers)
+        worksheet.format('A1:L1', {'textFormat': {'bold': True}})
+    
+    subjects_str = ""
+    if data.get('subjects'):
+        subjects_str = " | ".join([
+            f"{s.get('subject_name', 'N/A')}: {s.get('marks_obtained', 0)}/{s.get('max_marks', 100)}"
+            for s in data['subjects']
+        ])
+    
+    row = [
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        filename,
+        data.get('student_name') or 'N/A',
+        data.get('roll_number') or 'N/A',
+        data.get('school') or 'N/A',
+        data.get('class') or 'N/A',
+        data.get('exam') or 'N/A',
+        data.get('total_marks_obtained') or 0,
+        data.get('total_max_marks') or 0,
+        data.get('percentage') or 0,
+        data.get('result') or 'N/A',
+        subjects_str
+    ]
+    
+    worksheet.append_row(row, value_input_option='USER_ENTERED')
+    st.success(f"✅ Saved to tab: **{tab_name}**")
 
 
 # ============ PASSBOOK FUNCTIONS ============
@@ -326,47 +321,41 @@ Look carefully for IFSC (like SBIN0001234), MICR (9 digits), account numbers."""
 
 
 def save_passbook_to_sheets(sheets_client, spreadsheet_id, data, filename):
-    """Save passbook data to Google Sheets."""
+    """Save passbook data to Google Sheets. Raises exception on failure."""
+    spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+    
+    headers = [
+        "Timestamp", "Filename", "Account Holder", "Account Number", "Bank Name",
+        "Branch Name", "IFSC Code", "MICR Code", "Customer ID",
+        "Account Type", "Branch Address"
+    ]
+    
     try:
-        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
-        
-        headers = [
-            "Timestamp", "Filename", "Account Holder", "Account Number", "Bank Name",
-            "Branch Name", "IFSC Code", "MICR Code", "Customer ID",
-            "Account Type", "Branch Address"
-        ]
-        
-        try:
-            worksheet = spreadsheet.worksheet("Passbooks")
-            first_row = worksheet.row_values(1)
-            if not first_row or first_row[0] != "Timestamp":
-                worksheet.insert_row(headers, 1)
-                worksheet.format('A1:K1', {'textFormat': {'bold': True}})
-        except gspread.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title="Passbooks", rows=1000, cols=15)
-            worksheet.append_row(headers)
+        worksheet = spreadsheet.worksheet("Passbooks")
+        first_row = worksheet.row_values(1)
+        if not first_row or first_row[0] != "Timestamp":
+            worksheet.insert_row(headers, 1)
             worksheet.format('A1:K1', {'textFormat': {'bold': True}})
-        
-        row = [
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            filename,
-            data.get('account_holder_name') or 'N/A',
-            data.get('account_number') or 'N/A',
-            data.get('bank_name') or 'N/A',
-            data.get('branch_name') or 'N/A',
-            data.get('ifsc_code') or 'N/A',
-            data.get('micr_code') or 'N/A',
-            data.get('customer_id') or 'N/A',
-            data.get('account_type') or 'N/A',
-            data.get('branch_address') or 'N/A'
-        ]
-        
-        worksheet.append_row(row, value_input_option='USER_ENTERED')
-        return True
-        
-    except Exception as e:
-        st.error(f"Sheets error: {e}")
-        return False
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title="Passbooks", rows=1000, cols=15)
+        worksheet.append_row(headers)
+        worksheet.format('A1:K1', {'textFormat': {'bold': True}})
+    
+    row = [
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        filename,
+        data.get('account_holder_name') or 'N/A',
+        data.get('account_number') or 'N/A',
+        data.get('bank_name') or 'N/A',
+        data.get('branch_name') or 'N/A',
+        data.get('ifsc_code') or 'N/A',
+        data.get('micr_code') or 'N/A',
+        data.get('customer_id') or 'N/A',
+        data.get('account_type') or 'N/A',
+        data.get('branch_address') or 'N/A'
+    ]
+    
+    worksheet.append_row(row, value_input_option='USER_ENTERED')
 
 
 # ============ TRACKING PROCESSED FILES ============
@@ -785,6 +774,8 @@ if process_all:
     total_successful = 0
     total_failed = 0
     
+    st.info(f"**Debug:** Aug-Dec files: {len(marksheet_files)} | Jan-May files: {len(marksheet_jm_files)} | Passbook files: {len(passbook_files)}")
+    
     # Process Aug-Dec Marksheets
     if marksheet_files:
         st.markdown("## 📚 Processing Aug-Dec Marksheets...")
@@ -822,6 +813,8 @@ if process_all:
         
         total_successful += successful
         total_failed += failed
+    else:
+        st.warning("⚠️ Jan-May marksheet file list is empty - nothing to process")
     
     # Process Passbooks
     if passbook_files:
