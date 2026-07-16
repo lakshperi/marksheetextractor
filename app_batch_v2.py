@@ -785,6 +785,8 @@ if process_all:
     total_successful = 0
     total_failed = 0
     
+    st.info(f"**Debug:** Aug-Dec files: {len(marksheet_files)} | Jan-May files: {len(marksheet_jm_files)} | Passbook files: {len(passbook_files)}")
+    
     # Process Aug-Dec Marksheets
     if marksheet_files:
         st.markdown("## 📚 Processing Aug-Dec Marksheets...")
@@ -822,6 +824,8 @@ if process_all:
         
         total_successful += successful
         total_failed += failed
+    else:
+        st.warning("⚠️ Jan-May marksheet file list is empty - nothing to process")
     
     # Process Passbooks
     if passbook_files:
