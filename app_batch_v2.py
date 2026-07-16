@@ -557,6 +557,32 @@ if not services_ready:
 processed_ids = get_processed_file_ids(sheets_client, sheet_id)
 st.sidebar.markdown(f"**📊 Already processed:** {len(processed_ids)} files")
 
+# Helper to list and cache files in session state
+def list_and_cache_files(folder_id, cache_key, processed_ids):
+    """List files from Drive and cache in session state to survive reruns."""
+    files = []
+    new_files = []
+    skipped = 0
+    
+    if not folder_id:
+        return files, new_files, skipped
+    
+    try:
+        all_files = list_files_in_folder(drive_service, folder_id)
+        if all_files:
+            new_files, skipped = filter_new_files(all_files, processed_ids)
+            files = new_files
+            st.session_state[cache_key] = files
+        else:
+            st.session_state[cache_key] = []
+    except Exception as e:
+        st.error(f"Error listing files: {e}")
+        files = st.session_state.get(cache_key, [])
+        new_files = files
+    
+    return files, new_files, skipped
+
+
 # Three columns for the three folder types
 col1, col2, col3 = st.columns(3)
 
@@ -575,28 +601,20 @@ with col1:
         key="marksheet_folder"
     )
     
-    marksheet_files = []
-    marksheet_new_files = []
-    marksheet_skipped = 0
+    marksheet_files, marksheet_new_files, marksheet_skipped = list_and_cache_files(
+        marksheet_folder_id, '_cache_marksheet_files', processed_ids
+    )
     
     if marksheet_folder_id:
-        try:
-            all_marksheet_files = list_files_in_folder(drive_service, marksheet_folder_id)
-            if all_marksheet_files:
-                marksheet_new_files, marksheet_skipped = filter_new_files(all_marksheet_files, processed_ids)
-                marksheet_files = marksheet_new_files
-                
-                st.success(f"**{len(marksheet_new_files)}** new files to process")
-                if marksheet_skipped > 0:
-                    st.info(f"⏭️ Skipping {marksheet_skipped} already processed")
-                
-                with st.expander(f"View new files ({len(marksheet_new_files)})"):
-                    for f in marksheet_new_files:
-                        st.markdown(f"- {f['name']}")
-            else:
-                st.info("No files found in folder")
-        except Exception as e:
-            st.error(f"Error: {e}")
+        if marksheet_new_files:
+            st.success(f"**{len(marksheet_new_files)}** new files to process")
+            if marksheet_skipped > 0:
+                st.info(f"⏭️ Skipping {marksheet_skipped} already processed")
+            with st.expander(f"View new files ({len(marksheet_new_files)})"):
+                for f in marksheet_new_files:
+                    st.markdown(f"- {f['name']}")
+        elif not marksheet_files:
+            st.info("No files found in folder")
     
     process_marksheets = st.button("🚀 Process Aug-Dec", key="btn_marksheets", 
                                     disabled=not marksheet_files, use_container_width=True)
@@ -617,28 +635,20 @@ with col2:
         key="marksheet_folder_jan_may"
     )
     
-    marksheet_jm_files = []
-    marksheet_jm_new_files = []
-    marksheet_jm_skipped = 0
+    marksheet_jm_files, marksheet_jm_new_files, marksheet_jm_skipped = list_and_cache_files(
+        marksheet_jm_folder_id, '_cache_marksheet_jm_files', processed_ids
+    )
     
     if marksheet_jm_folder_id:
-        try:
-            all_marksheet_jm_files = list_files_in_folder(drive_service, marksheet_jm_folder_id)
-            if all_marksheet_jm_files:
-                marksheet_jm_new_files, marksheet_jm_skipped = filter_new_files(all_marksheet_jm_files, processed_ids)
-                marksheet_jm_files = marksheet_jm_new_files
-                
-                st.success(f"**{len(marksheet_jm_new_files)}** new files to process")
-                if marksheet_jm_skipped > 0:
-                    st.info(f"⏭️ Skipping {marksheet_jm_skipped} already processed")
-                
-                with st.expander(f"View new files ({len(marksheet_jm_new_files)})"):
-                    for f in marksheet_jm_new_files:
-                        st.markdown(f"- {f['name']}")
-            else:
-                st.info("No files found in folder")
-        except Exception as e:
-            st.error(f"Error: {e}")
+        if marksheet_jm_new_files:
+            st.success(f"**{len(marksheet_jm_new_files)}** new files to process")
+            if marksheet_jm_skipped > 0:
+                st.info(f"⏭️ Skipping {marksheet_jm_skipped} already processed")
+            with st.expander(f"View new files ({len(marksheet_jm_new_files)})"):
+                for f in marksheet_jm_new_files:
+                    st.markdown(f"- {f['name']}")
+        elif not marksheet_jm_files:
+            st.info("No files found in folder")
     
     process_marksheets_jm = st.button("🚀 Process Jan-May", key="btn_marksheets_jm",
                                        disabled=not marksheet_jm_files, use_container_width=True)
@@ -659,28 +669,20 @@ with col3:
         key="passbook_folder"
     )
     
-    passbook_files = []
-    passbook_new_files = []
-    passbook_skipped = 0
+    passbook_files, passbook_new_files, passbook_skipped = list_and_cache_files(
+        passbook_folder_id, '_cache_passbook_files', processed_ids
+    )
     
     if passbook_folder_id:
-        try:
-            all_passbook_files = list_files_in_folder(drive_service, passbook_folder_id)
-            if all_passbook_files:
-                passbook_new_files, passbook_skipped = filter_new_files(all_passbook_files, processed_ids)
-                passbook_files = passbook_new_files
-                
-                st.success(f"**{len(passbook_new_files)}** new files to process")
-                if passbook_skipped > 0:
-                    st.info(f"⏭️ Skipping {passbook_skipped} already processed")
-                
-                with st.expander(f"View new files ({len(passbook_new_files)})"):
-                    for f in passbook_new_files:
-                        st.markdown(f"- {f['name']}")
-            else:
-                st.info("No files found in folder")
-        except Exception as e:
-            st.error(f"Error: {e}")
+        if passbook_new_files:
+            st.success(f"**{len(passbook_new_files)}** new files to process")
+            if passbook_skipped > 0:
+                st.info(f"⏭️ Skipping {passbook_skipped} already processed")
+            with st.expander(f"View new files ({len(passbook_new_files)})"):
+                for f in passbook_new_files:
+                    st.markdown(f"- {f['name']}")
+        elif not passbook_files:
+            st.info("No files found in folder")
     
     process_passbooks = st.button("🚀 Process Passbooks", key="btn_passbooks",
                                    disabled=not passbook_files, use_container_width=True)
