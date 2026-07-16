@@ -1,6 +1,6 @@
 """
-Document Extractor - Dual Folder Batch Processing
-Separate folders for Marksheets & Passbooks → Saves to different Sheet tabs
+Document Extractor - Multi Folder Batch Processing
+Separate folders for Aug-Dec Marksheets, Jan-May Marksheets & Passbooks → Saves to different Sheet tabs
 """
 
 import streamlit as st
@@ -91,7 +91,7 @@ st.markdown("""
 st.markdown("""
 <div class="main-header">
     <h1>📁 Batch Document Extractor</h1>
-    <p>Separate folders for Marksheets & Passbooks → Auto-save to Google Sheets</p>
+    <p>Aug-Dec & Jan-May Marksheets + Passbooks → Auto-save to Google Sheets</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -503,7 +503,8 @@ def get_secret(key):
 google_creds = get_secret("GOOGLE_CREDENTIALS")
 anthropic_key = get_secret("ANTHROPIC_API_KEY")
 spreadsheet_id = get_secret("GOOGLE_SPREADSHEET_ID")
-marksheet_folder = get_secret("MARKSHEET_FOLDER_ID")
+marksheet_folder = get_secret("MARKSHEET_FOLDER_ID_AUG_DEC")
+marksheet_folder_jan_may = get_secret("MARKSHEET_FOLDER_ID_JAN_MAY")
 passbook_folder = get_secret("PASSBOOK_FOLDER_ID")
 
 
@@ -563,19 +564,19 @@ if not services_ready:
 processed_ids = get_processed_file_ids(sheets_client, sheet_id)
 st.sidebar.markdown(f"**📊 Already processed:** {len(processed_ids)} files")
 
-# Two columns for the two folder types
-col1, col2 = st.columns(2)
+# Three columns for the three folder types
+col1, col2, col3 = st.columns(3)
 
-# ============ MARKSHEETS SECTION ============
+# ============ AUG-DEC MARKSHEETS SECTION ============
 with col1:
     st.markdown("""
     <div class="folder-card">
-        <h3>📚 Marksheets Folder</h3>
+        <h3>📚 Aug - Dec Marksheets</h3>
     </div>
     """, unsafe_allow_html=True)
     
     marksheet_folder_id = st.text_input(
-        "Marksheets Folder ID",
+        "Aug-Dec Folder ID",
         value=marksheet_folder or "",
         placeholder="Enter folder ID...",
         key="marksheet_folder"
@@ -589,13 +590,12 @@ with col1:
         try:
             all_marksheet_files = list_files_in_folder(drive_service, marksheet_folder_id)
             if all_marksheet_files:
-                # Filter out already processed files
                 marksheet_new_files, marksheet_skipped = filter_new_files(all_marksheet_files, processed_ids)
                 marksheet_files = marksheet_new_files
                 
                 st.success(f"**{len(marksheet_new_files)}** new files to process")
                 if marksheet_skipped > 0:
-                    st.info(f"⏭️ Skipping {marksheet_skipped} already processed files")
+                    st.info(f"⏭️ Skipping {marksheet_skipped} already processed")
                 
                 with st.expander(f"View new files ({len(marksheet_new_files)})"):
                     for f in marksheet_new_files:
@@ -605,15 +605,57 @@ with col1:
         except Exception as e:
             st.error(f"Error: {e}")
     
-    process_marksheets = st.button("🚀 Process New Marksheets", key="btn_marksheets", 
+    process_marksheets = st.button("🚀 Process Aug-Dec", key="btn_marksheets", 
                                     disabled=not marksheet_files, use_container_width=True)
 
 
-# ============ PASSBOOKS SECTION ============
+# ============ JAN-MAY MARKSHEETS SECTION ============
 with col2:
     st.markdown("""
     <div class="folder-card">
-        <h3>🏦 Passbooks Folder</h3>
+        <h3>📚 Jan - May Marksheets</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    marksheet_jm_folder_id = st.text_input(
+        "Jan-May Folder ID",
+        value=marksheet_folder_jan_may or "",
+        placeholder="Enter folder ID...",
+        key="marksheet_folder_jan_may"
+    )
+    
+    marksheet_jm_files = []
+    marksheet_jm_new_files = []
+    marksheet_jm_skipped = 0
+    
+    if marksheet_jm_folder_id:
+        try:
+            all_marksheet_jm_files = list_files_in_folder(drive_service, marksheet_jm_folder_id)
+            if all_marksheet_jm_files:
+                marksheet_jm_new_files, marksheet_jm_skipped = filter_new_files(all_marksheet_jm_files, processed_ids)
+                marksheet_jm_files = marksheet_jm_new_files
+                
+                st.success(f"**{len(marksheet_jm_new_files)}** new files to process")
+                if marksheet_jm_skipped > 0:
+                    st.info(f"⏭️ Skipping {marksheet_jm_skipped} already processed")
+                
+                with st.expander(f"View new files ({len(marksheet_jm_new_files)})"):
+                    for f in marksheet_jm_new_files:
+                        st.markdown(f"- {f['name']}")
+            else:
+                st.info("No files found in folder")
+        except Exception as e:
+            st.error(f"Error: {e}")
+    
+    process_marksheets_jm = st.button("🚀 Process Jan-May", key="btn_marksheets_jm",
+                                       disabled=not marksheet_jm_files, use_container_width=True)
+
+
+# ============ PASSBOOKS SECTION ============
+with col3:
+    st.markdown("""
+    <div class="folder-card">
+        <h3>🏦 Passbooks</h3>
     </div>
     """, unsafe_allow_html=True)
     
@@ -632,13 +674,12 @@ with col2:
         try:
             all_passbook_files = list_files_in_folder(drive_service, passbook_folder_id)
             if all_passbook_files:
-                # Filter out already processed files
                 passbook_new_files, passbook_skipped = filter_new_files(all_passbook_files, processed_ids)
                 passbook_files = passbook_new_files
                 
                 st.success(f"**{len(passbook_new_files)}** new files to process")
                 if passbook_skipped > 0:
-                    st.info(f"⏭️ Skipping {passbook_skipped} already processed files")
+                    st.info(f"⏭️ Skipping {passbook_skipped} already processed")
                 
                 with st.expander(f"View new files ({len(passbook_new_files)})"):
                     for f in passbook_new_files:
@@ -648,7 +689,7 @@ with col2:
         except Exception as e:
             st.error(f"Error: {e}")
     
-    process_passbooks = st.button("🚀 Process New Passbooks", key="btn_passbooks",
+    process_passbooks = st.button("🚀 Process Passbooks", key="btn_passbooks",
                                    disabled=not passbook_files, use_container_width=True)
 
 
@@ -658,7 +699,7 @@ st.markdown("---")
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     process_all = st.button("🚀 Process ALL Documents", 
-                            disabled=not (marksheet_files or passbook_files),
+                            disabled=not (marksheet_files or marksheet_jm_files or passbook_files),
                             use_container_width=True)
 
 
@@ -680,16 +721,36 @@ def show_results(doc_type, successful, failed, results):
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 
-# Process Marksheets Only
+# Process Aug-Dec Marksheets Only
 if process_marksheets and marksheet_files:
     st.markdown("---")
-    st.markdown("## Processing Marksheets...")
+    st.markdown("## Processing Aug-Dec Marksheets...")
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     successful, failed, results = process_batch(
         marksheet_files, "marksheet", drive_service, vision_client, 
+        sheets_client, api_key, sheet_id, progress_bar, status_text
+    )
+    
+    status_text.empty()
+    progress_bar.empty()
+    
+    show_results("marksheet", successful, failed, results)
+    st.markdown(f"[📊 Open Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id})")
+
+
+# Process Jan-May Marksheets Only
+if process_marksheets_jm and marksheet_jm_files:
+    st.markdown("---")
+    st.markdown("## Processing Jan-May Marksheets...")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    successful, failed, results = process_batch(
+        marksheet_jm_files, "marksheet", drive_service, vision_client,
         sheets_client, api_key, sheet_id, progress_bar, status_text
     )
     
@@ -727,14 +788,32 @@ if process_all:
     total_successful = 0
     total_failed = 0
     
-    # Process Marksheets
+    # Process Aug-Dec Marksheets
     if marksheet_files:
-        st.markdown("## 📚 Processing Marksheets...")
+        st.markdown("## 📚 Processing Aug-Dec Marksheets...")
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         successful, failed, results = process_batch(
             marksheet_files, "marksheet", drive_service, vision_client,
+            sheets_client, api_key, sheet_id, progress_bar, status_text
+        )
+        
+        status_text.empty()
+        progress_bar.empty()
+        show_results("marksheet", successful, failed, results)
+        
+        total_successful += successful
+        total_failed += failed
+    
+    # Process Jan-May Marksheets
+    if marksheet_jm_files:
+        st.markdown("## 📚 Processing Jan-May Marksheets...")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        successful, failed, results = process_batch(
+            marksheet_jm_files, "marksheet", drive_service, vision_client,
             sheets_client, api_key, sheet_id, progress_bar, status_text
         )
         
@@ -771,7 +850,7 @@ if process_all:
     with col1:
         st.markdown(f"""
         <div class="stat-card">
-            <div class="stat-number">{len(marksheet_files) + len(passbook_files)}</div>
+            <div class="stat-number">{len(marksheet_files) + len(marksheet_jm_files) + len(passbook_files)}</div>
             <div class="stat-label">Total Files</div>
         </div>
         """, unsafe_allow_html=True)
@@ -797,7 +876,7 @@ if process_all:
 st.markdown("""
 <div class="footer">
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
-    <p style="font-size: 0.8rem;">Marksheets → "Marksheets" tab | Passbooks → "Passbooks" tab</p>
+    <p style="font-size: 0.8rem;">Aug-Dec & Jan-May Marksheets → "Marksheets" tab | Passbooks → "Passbooks" tab</p>
 </div>
 """, unsafe_allow_html=True)
 
