@@ -238,7 +238,7 @@ IMPORTANT: Use TOTAL column if CA/ESE/TOTAL exists. Extract ALL subjects with fu
     return response.content[0].text
 
 
-def save_marksheet_to_sheets(sheets_client, spreadsheet_id, data, filename):
+def save_marksheet_to_sheets(sheets_client, spreadsheet_id, data, filename, tab_name="Marksheets"):
     """Save marksheet data to Google Sheets."""
     try:
         spreadsheet = sheets_client.open_by_key(spreadsheet_id)
@@ -250,13 +250,13 @@ def save_marksheet_to_sheets(sheets_client, spreadsheet_id, data, filename):
         ]
         
         try:
-            worksheet = spreadsheet.worksheet("Marksheets")
+            worksheet = spreadsheet.worksheet(tab_name)
             first_row = worksheet.row_values(1)
             if not first_row or first_row[0] != "Timestamp":
                 worksheet.insert_row(headers, 1)
                 worksheet.format('A1:L1', {'textFormat': {'bold': True}})
         except gspread.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title="Marksheets", rows=1000, cols=20)
+            worksheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=20)
             worksheet.append_row(headers)
             worksheet.format('A1:L1', {'textFormat': {'bold': True}})
         
@@ -425,7 +425,7 @@ def filter_new_files(files, processed_ids):
 # ============ BATCH PROCESSING ============
 
 def process_batch(files, doc_type, drive_service, vision_client, sheets_client, 
-                  api_key, sheet_id, progress_bar, status_text):
+                  api_key, sheet_id, progress_bar, status_text, tab_name=None):
     """Process a batch of files."""
     successful = 0
     failed = 0
@@ -437,10 +437,8 @@ def process_batch(files, doc_type, drive_service, vision_client, sheets_client,
         status_text.markdown(f"**Processing ({i+1}/{len(files)}):** {filename}")
         
         try:
-            # Download file
             file_bytes = download_file(drive_service, file['id'])
             
-            # Convert PDF to image if needed
             if file['mimeType'] == 'application/pdf':
                 image_bytes = pdf_to_image(file_bytes)
                 if not image_bytes:
@@ -448,16 +446,13 @@ def process_batch(files, doc_type, drive_service, vision_client, sheets_client,
             else:
                 image_bytes = file_bytes
             
-            # Extract text with Vision
             extracted_text = extract_text_with_vision(image_bytes, vision_client)
             
-            # Parse with Claude
             if doc_type == "marksheet":
                 result = parse_marksheet_with_claude(extracted_text, api_key)
             else:
                 result = parse_passbook_with_claude(extracted_text, api_key)
             
-            # Clean JSON
             clean_result = result.strip()
             if clean_result.startswith("```"):
                 clean_result = clean_result.split("\n", 1)[1] if "\n" in clean_result else clean_result[3:]
@@ -467,15 +462,13 @@ def process_batch(files, doc_type, drive_service, vision_client, sheets_client,
             
             data = json.loads(clean_result)
             
-            # Save to sheets
             if doc_type == "marksheet":
-                save_marksheet_to_sheets(sheets_client, sheet_id, data, filename)
+                save_marksheet_to_sheets(sheets_client, sheet_id, data, filename, tab_name or "Marksheets")
                 name = data.get('student_name', 'Unknown')
             else:
                 save_passbook_to_sheets(sheets_client, sheet_id, data, filename)
                 name = data.get('account_holder_name', 'Unknown')
             
-            # Mark file as processed
             mark_file_as_processed(sheets_client, sheet_id, file_id, filename, doc_type)
             
             successful += 1
@@ -486,7 +479,7 @@ def process_batch(files, doc_type, drive_service, vision_client, sheets_client,
             results.append({"file": filename, "status": "❌", "name": str(e)[:50]})
         
         progress_bar.progress((i + 1) / len(files))
-        time.sleep(0.5)  # Rate limit
+        time.sleep(0.5)
     
     return successful, failed, results
 
@@ -731,7 +724,8 @@ if process_marksheets and marksheet_files:
     
     successful, failed, results = process_batch(
         marksheet_files, "marksheet", drive_service, vision_client, 
-        sheets_client, api_key, sheet_id, progress_bar, status_text
+        sheets_client, api_key, sheet_id, progress_bar, status_text,
+        tab_name="Marksheets Aug-Dec"
     )
     
     status_text.empty()
@@ -751,7 +745,8 @@ if process_marksheets_jm and marksheet_jm_files:
     
     successful, failed, results = process_batch(
         marksheet_jm_files, "marksheet", drive_service, vision_client,
-        sheets_client, api_key, sheet_id, progress_bar, status_text
+        sheets_client, api_key, sheet_id, progress_bar, status_text,
+        tab_name="Marksheets Jan-May"
     )
     
     status_text.empty()
@@ -796,7 +791,8 @@ if process_all:
         
         successful, failed, results = process_batch(
             marksheet_files, "marksheet", drive_service, vision_client,
-            sheets_client, api_key, sheet_id, progress_bar, status_text
+            sheets_client, api_key, sheet_id, progress_bar, status_text,
+            tab_name="Marksheets Aug-Dec"
         )
         
         status_text.empty()
@@ -814,7 +810,8 @@ if process_all:
         
         successful, failed, results = process_batch(
             marksheet_jm_files, "marksheet", drive_service, vision_client,
-            sheets_client, api_key, sheet_id, progress_bar, status_text
+            sheets_client, api_key, sheet_id, progress_bar, status_text,
+            tab_name="Marksheets Jan-May"
         )
         
         status_text.empty()
@@ -876,7 +873,7 @@ if process_all:
 st.markdown("""
 <div class="footer">
     <p>Built for Canada Nagarathar Sangam - Education Committee</p>
-    <p style="font-size: 0.8rem;">Aug-Dec & Jan-May Marksheets → "Marksheets" tab | Passbooks → "Passbooks" tab</p>
+    <p style="font-size: 0.8rem;">Aug-Dec → "Marksheets Aug-Dec" tab | Jan-May → "Marksheets Jan-May" tab | Passbooks → "Passbooks" tab</p>
 </div>
 """, unsafe_allow_html=True)
 
