@@ -228,10 +228,13 @@ Return this exact JSON structure:
     "total_marks_obtained": number,
     "total_max_marks": number,
     "percentage": number,
-    "result": "PASS/FAIL"
+    "result": "PASS/FAIL/SUCCESSFUL"
 }}
 
-IMPORTANT: Use TOTAL column if CA/ESE/TOTAL exists. Extract ALL subjects with full names. Never use 0 unless actually 0."""
+IMPORTANT RULES:
+- Use TOTAL column if CA/ESE/TOTAL exists. Extract ALL subjects with full names. Never use 0 unless actually 0.
+- For "result": Look for the OVERALL result of the student (usually at the bottom of the marksheet near total marks). It will say PASS, FAIL, SUCCESSFUL, or similar. Do NOT confuse column headers like "PASS/FAIL" with the actual result. If individual subjects all show "P" (Pass), the overall result is PASS.
+- If marks are written as words (e.g. "094 ZERO NINE FOUR"), use the numeric value (094 = 94)."""
         }]
     )
     
